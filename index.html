@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Brand Market Analysis Agent</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 60px 20px;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 48px;
+    }
+
+    header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #6ee7f7, #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 8px;
+    }
+
+    header p {
+      color: #94a3b8;
+      font-size: 0.95rem;
+    }
+
+    .card {
+      background: #1e2130;
+      border: 1px solid #2d3148;
+      border-radius: 16px;
+      padding: 36px;
+      width: 100%;
+      max-width: 680px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    }
+
+    .input-group {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 10px;
+      padding: 12px 16px;
+      color: #e2e8f0;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input[type="text"]:focus {
+      border-color: #6ee7f7;
+    }
+
+    input[type="text"]::placeholder {
+      color: #4a5568;
+    }
+
+    button {
+      cursor: pointer;
+      border: none;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      padding: 12px 22px;
+      transition: opacity 0.2s, transform 0.1s;
+    }
+
+    button:active {
+      transform: scale(0.97);
+    }
+
+    #startBtn {
+      background: linear-gradient(135deg, #6ee7f7, #a78bfa);
+      color: #0f1117;
+      white-space: nowrap;
+    }
+
+    #startBtn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* Loading status */
+    #statusArea {
+      display: none;
+      align-items: center;
+      gap: 12px;
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 10px;
+      padding: 14px 18px;
+      margin-bottom: 24px;
+    }
+
+    #statusArea.active {
+      display: flex;
+    }
+
+    .spinner {
+      width: 18px;
+      height: 18px;
+      border: 2px solid #2d3148;
+      border-top-color: #6ee7f7;
+      border-radius: 50%;
+      flex-shrink: 0;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    #statusText {
+      color: #94a3b8;
+      font-size: 0.9rem;
+      transition: opacity 0.3s;
+    }
+
+    .progress-bar-track {
+      height: 4px;
+      background: #2d3148;
+      border-radius: 999px;
+      margin-top: 12px;
+      overflow: hidden;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #6ee7f7, #a78bfa);
+      border-radius: 999px;
+      transition: width 1.2s ease;
+    }
+
+    /* Results */
+    #resultsSection {
+      display: none;
+    }
+
+    #resultsSection.visible {
+      display: block;
+    }
+
+    #resultsSection h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 14px;
+    }
+
+    #resultsPreview {
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 10px;
+      padding: 20px;
+      font-size: 0.88rem;
+      line-height: 1.7;
+      color: #cbd5e1;
+      white-space: pre-wrap;
+      min-height: 120px;
+      margin-bottom: 20px;
+    }
+
+    #downloadBtn {
+      display: none;
+      width: 100%;
+      background: #22c55e;
+      color: #fff;
+      padding: 13px;
+      font-size: 0.95rem;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #downloadBtn.visible {
+      display: flex;
+    }
+
+    #downloadBtn:hover {
+      opacity: 0.88;
+    }
+
+    .icon {
+      font-style: normal;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Brand Market Analysis Agent</h1>
+    <p>AI-powered brand intelligence &amp; PDF reporting</p>
+  </header>
+
+  <div class="card">
+
+    <!-- Input -->
+    <div class="input-group">
+      <input
+        type="text"
+        id="brandInput"
+        placeholder="Enter brand name, e.g. Luckin Coffee"
+        autocomplete="off"
+      />
+      <button id="startBtn" onclick="startAnalysis()">Start Analysis</button>
+    </div>
+
+    <!-- Loading status -->
+    <div id="statusArea">
+      <div class="spinner"></div>
+      <div style="flex:1">
+        <div id="statusText">Collecting data...</div>
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill" id="progressFill"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div id="resultsSection">
+      <h2>Analysis Preview</h2>
+      <div id="resultsPreview"></div>
+      <button id="downloadBtn" onclick="downloadPDF()">
+        <span class="icon">&#8675;</span> Download PDF Report
+      </button>
+    </div>
+
+  </div>
+
+  <script>
+    const STEPS = [
+      { label: "Collecting data...",       progress: 30 },
+      { label: "Running Analysis...",      progress: 65 },
+      { label: "Generating PDF Report...", progress: 90 },
+    ];
+
+    let stepTimer   = null;
+    let currentStep = 0;
+    let downloadUrl = "";
+
+    function setStep(i) {
+      document.getElementById("statusText").textContent = STEPS[i].label;
+      document.getElementById("progressFill").style.width = STEPS[i].progress + "%";
+    }
+
+    function resetUI() {
+      clearInterval(stepTimer);
+      currentStep = 0;
+      downloadUrl = "";
+      document.getElementById("startBtn").disabled = false;
+      document.getElementById("statusArea").classList.remove("active");
+      document.getElementById("progressFill").style.width = "0%";
+    }
+
+    async function startAnalysis() {
+      const brand = document.getElementById("brandInput").value.trim();
+      if (!brand) { document.getElementById("brandInput").focus(); return; }
+
+      // Reset
+      document.getElementById("startBtn").disabled = true;
+      document.getElementById("resultsSection").classList.remove("visible");
+      document.getElementById("downloadBtn").classList.remove("visible");
+      document.getElementById("resultsPreview").textContent = "";
+      currentStep = 0;
+
+      // Animate status while waiting
+      document.getElementById("statusArea").classList.add("active");
+      setStep(0);
+      stepTimer = setInterval(() => {
+        if (currentStep < STEPS.length - 1) {
+          currentStep++;
+          setStep(currentStep);
+        }
+      }, 3500);
+
+      try {
+        const res  = await fetch("/analyze", {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ brand }),
+        });
+        const data = await res.json();
+
+        clearInterval(stepTimer);
+
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || "Unknown server error.");
+        }
+
+        // Complete progress bar
+        document.getElementById("progressFill").style.width = "100%";
+        downloadUrl = data.downloadUrl;
+
+        setTimeout(() => {
+          document.getElementById("statusArea").classList.remove("active");
+          document.getElementById("startBtn").disabled = false;
+
+          const p = data.preview;
+          const trendArrow = { growing: "↑", stable: "→", declining: "↓" }[p.marketTrend] || "";
+          const lines = [
+            `Brand: ${data.brand}`,
+            `Sentiment Score: ${p.sentimentScore} / 100`,
+            `Market Trend: ${trendArrow} ${p.marketTrend.toUpperCase()}`,
+            ``,
+            `Pricing: ${p.priceSummary}`,
+            ``,
+            `Competitive: ${p.competitiveSummary}`,
+            ``,
+            `Strategic Insights:`,
+            ...p.strategicInsights.map((s) => `  • ${s}`),
+            ``,
+            `Recommendations:`,
+            ...p.recommendations.map((r) => `  • ${r}`),
+          ];
+
+          document.getElementById("resultsPreview").textContent = lines.join("\n");
+          document.getElementById("resultsSection").classList.add("visible");
+          document.getElementById("downloadBtn").classList.add("visible");
+        }, 500);
+
+      } catch (err) {
+        clearInterval(stepTimer);
+        resetUI();
+        document.getElementById("statusArea").classList.add("active");
+        document.getElementById("statusText").textContent = "Error: " + err.message;
+        document.getElementById("progressFill").style.width = "0%";
+        setTimeout(resetUI, 4000);
+      }
+    }
+
+    function downloadPDF() {
+      if (downloadUrl) window.open(downloadUrl, "_blank");
+    }
+  </script>
+
+</body>
+</html>
