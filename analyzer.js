@@ -1,10 +1,10 @@
 'use strict';
 
-require('dotenv').config();
+require('dotenv').config({ override: true });
 const axios = require('axios');
 
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const MODEL          = 'openai/gpt-oss-120b:free';
+const MODEL = 'gemini-2.5-flash-lite';
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 
 // ─── System prompt ────────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `\
@@ -35,13 +35,73 @@ DIMENSIONS TO COVER:
 4. Target Audience      — consumer demographics, psychographics, key user segments in China
 5. Competitive Landscape — main competitors, estimated market share, advantages and strategic threats
 
+SENTIMENT SCORE RUBRIC (0–100):
+Calculate sentimentScore as a weighted composite of the following 5 dimensions.
+Score each dimension 0–100 first, then apply the weights below:
+
+  1. Consumer Reputation (30%) — social media sentiment, user ratings, complaint rate, NPS
+  2. Market Performance   (25%) — revenue growth rate, market share trend, store expansion speed
+  3. Brand Awareness      (20%) — aided/unaided awareness, brand prestige, media coverage
+  4. Price Competitiveness(15%) — perceived value-for-money vs. key competitors
+  5. Channel Coverage     (10%) — breadth of online + offline distribution footprint
+
+Formula: sentimentScore = round(D1×0.30 + D2×0.25 + D3×0.20 + D4×0.15 + D5×0.10)
+Also include the sub-scores in the "sentimentBreakdown" field (see schema).
+
+Score anchors:
+  90–100 = industry leader, overwhelmingly positive
+  70–89  = strong brand with minor weaknesses
+  50–69  = mixed sentiment, notable risks
+  30–49  = significant challenges, negative trend
+  0–29   = severe crisis or market exit risk
+
+MARKET TREND RUBRIC:
+Determine marketTrend based on the following four indicators. Evaluate each, then pick the trend:
+
+  1. Revenue / GMV growth (most recent full year vs. prior year)
+     — >10% YoY growth      → supports "growing"
+     — -5% to +10%          → supports "stable"
+     — <-5% YoY decline     → supports "declining"
+
+  2. Store / SKU expansion
+     — Net new locations or product lines added → supports "growing"
+     — Flat footprint                           → supports "stable"
+     — Store closures or SKU cuts               → supports "declining"
+
+  3. Market share trajectory (vs. top 3 competitors)
+     — Share gaining          → supports "growing"
+     — Share roughly flat     → supports "stable"
+     — Share losing           → supports "declining"
+
+  4. Consumer demand signals (search index, social buzz, app downloads)
+     — Clear upward trend     → supports "growing"
+     — Flat                   → supports "stable"
+     — Clear downward trend   → supports "declining"
+
+Decision rule: majority of the 4 indicators determines the trend.
+If data is insufficient for an indicator, note it in marketTrendRationale and weight the remaining ones equally.
+
 Return ONLY this JSON object. No markdown fences, no extra text, no explanation:
 
 {
   "brand": "${brandName}",
   "analysisTimestamp": "<ISO 8601 datetime>",
-  "sentimentScore": <integer 0-100>,
+  "sentimentScore": <weighted composite integer 0-100>,
+  "sentimentBreakdown": {
+    "consumerReputation":    { "score": <0-100>, "weight": 0.30, "rationale": "<1 sentence>" },
+    "marketPerformance":     { "score": <0-100>, "weight": 0.25, "rationale": "<1 sentence>" },
+    "brandAwareness":        { "score": <0-100>, "weight": 0.20, "rationale": "<1 sentence>" },
+    "priceCompetitiveness":  { "score": <0-100>, "weight": 0.15, "rationale": "<1 sentence>" },
+    "channelCoverage":       { "score": <0-100>, "weight": 0.10, "rationale": "<1 sentence>" }
+  },
   "marketTrend": "<growing | stable | declining>",
+  "marketTrendRationale": {
+    "revenueGrowth":     "<indicator assessment + data point>",
+    "expansionSignals":  "<indicator assessment + data point>",
+    "marketShare":       "<indicator assessment + data point>",
+    "demandSignals":     "<indicator assessment + data point>",
+    "verdict":           "<1 sentence summary of why this trend was chosen>"
+  },
   "strategicInsights": ["<insight>", "<insight>", "<insight>"],
   "recommendations": ["<recommendation>", "<recommendation>", "<recommendation>"],
   "dimensions": [
@@ -112,8 +172,8 @@ function extractJSON(raw) {
 function validate(data, brandName) {
   if (!data || typeof data !== 'object') throw new Error('Parsed value is not an object.');
 
-  const required = ['brand', 'analysisTimestamp', 'sentimentScore', 'marketTrend',
-                    'strategicInsights', 'recommendations', 'dimensions'];
+  const required = ['brand', 'analysisTimestamp', 'sentimentScore', 'sentimentBreakdown',
+                    'marketTrend', 'marketTrendRationale', 'strategicInsights', 'recommendations', 'dimensions'];
   for (const key of required) {
     if (!(key in data)) throw new Error(`Missing required field: "${key}".`);
   }
@@ -137,31 +197,31 @@ function validate(data, brandName) {
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 async function analyzeBrand(brandName) {
-  if (!process.env.OPENROUTER_API_KEY) {
-    throw new Error('OPENROUTER_API_KEY is not set in environment variables.');
+  if (!process.env.GOOGLE_API_KEY) {
+    throw new Error('GOOGLE_API_KEY is not set in environment variables.');
+  }
+
+  // Read proxy from environment (HTTP_PROXY / HTTPS_PROXY) so Node.js uses it like curl does
+  const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
+  let proxyConfig = false;
+  if (proxyUrl) {
+    const u = new URL(proxyUrl);
+    proxyConfig = { host: u.hostname, port: Number(u.port), protocol: u.protocol };
   }
 
   const response = await axios.post(
-    OPENROUTER_URL,
+    `${GEMINI_URL}?key=${process.env.GOOGLE_API_KEY}`,
     {
-      model:    MODEL,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user',   content: buildPrompt(brandName) },
-      ],
+      system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents: [{ role: 'user', parts: [{ text: buildPrompt(brandName) }] }],
+      generationConfig: { temperature: 0.2, maxOutputTokens: 4096 },
     },
-    {
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        'Content-Type':  'application/json',
-      },
-      timeout: 120_000,
-    },
+    { headers: { 'Content-Type': 'application/json' }, timeout: 120_000, proxy: proxyConfig },
   );
 
-  const text = response.data?.choices?.[0]?.message?.content;
+  const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text || !text.trim()) {
-    throw new Error('OpenRouter returned no text output.');
+    throw new Error('Gemini returned no text output.');
   }
 
   const parsed = extractJSON(text);

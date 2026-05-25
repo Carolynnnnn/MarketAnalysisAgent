@@ -1,6 +1,6 @@
 'use strict';
 
-require('dotenv').config();
+require('dotenv').config({ override: true });
 
 const express = require('express');
 const cors    = require('cors');
@@ -56,8 +56,9 @@ app.post('/analyze', async (req, res) => {
     analysis = await analyzeBrand(brandName);
     log('info', 'ANALYZE', `Analysis complete. Sentiment: ${analysis.sentimentScore}, Trend: ${analysis.marketTrend}, Dimensions: ${analysis.dimensions.length}`);
   } catch (err) {
-    log('error', 'ANALYZE', 'Claude analysis failed.', err.message);
-    return res.status(502).json({ success: false, error: `AI analysis failed: ${err.message}` });
+    const detail = err.response?.data?.error?.message ?? err.message ?? String(err);
+    log('error', 'ANALYZE', 'Claude analysis failed.', detail);
+    return res.status(502).json({ success: false, error: `AI analysis failed: ${detail}` });
   }
 
   // ── Step 2: PDF generation ────────────────────────────────────────────────
@@ -81,17 +82,18 @@ app.post('/analyze', async (req, res) => {
   );
 
   const preview = {
-    brand:             analysis.brand,
-    sentimentScore:    analysis.sentimentScore,
-    marketTrend:       analysis.marketTrend,
-    strategicInsights: (analysis.strategicInsights ?? []).slice(0, 3),
-    recommendations:   (analysis.recommendations   ?? []).slice(0, 3),
-    dimensions:        (analysis.dimensions ?? []).map(({ id, title, summary, conclusion }) => ({
+    brand:                 analysis.brand,
+    sentimentScore:        analysis.sentimentScore,
+    sentimentBreakdown:    analysis.sentimentBreakdown ?? {},
+    marketTrend:           analysis.marketTrend,
+    marketTrendRationale:  analysis.marketTrendRationale ?? {},
+    strategicInsights:   (analysis.strategicInsights ?? []).slice(0, 3),
+    recommendations:     (analysis.recommendations   ?? []).slice(0, 3),
+    dimensions:          (analysis.dimensions ?? []).map(({ id, title, summary, conclusion }) => ({
       id, title, summary, conclusion,
     })),
-    // Convenience shortcuts for the UI
-    priceSummary:       dimMap.D1?.summary ?? '',
-    competitiveSummary: dimMap.D5?.summary ?? '',
+    priceSummary:         dimMap.D1?.summary ?? '',
+    competitiveSummary:   dimMap.D5?.summary ?? '',
   };
 
   log('info', 'PIPELINE', `Analysis pipeline complete for "${brandName}". Sending response.`);

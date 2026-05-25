@@ -183,7 +183,122 @@
       color: #cbd5e1;
       white-space: pre-wrap;
       min-height: 120px;
+      margin-bottom: 16px;
+    }
+
+    #scoreBreakdown {
+      display: none;
       margin-bottom: 20px;
+    }
+
+    #scoreBreakdown.visible {
+      display: block;
+    }
+
+    #scoreBreakdown h3 {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 10px;
+    }
+
+    .score-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+      font-size: 0.82rem;
+    }
+
+    .score-label {
+      width: 160px;
+      flex-shrink: 0;
+      color: #94a3b8;
+    }
+
+    .score-bar-track {
+      flex: 1;
+      height: 6px;
+      background: #2d3148;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .score-bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #6ee7f7, #a78bfa);
+      transition: width 0.8s ease;
+    }
+
+    .score-num {
+      width: 36px;
+      text-align: right;
+      color: #e2e8f0;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .score-weight {
+      width: 38px;
+      text-align: right;
+      color: #4a5568;
+      font-size: 0.75rem;
+      flex-shrink: 0;
+    }
+
+    #trendRationale {
+      display: none;
+      margin-bottom: 20px;
+    }
+
+    #trendRationale.visible {
+      display: block;
+    }
+
+    #trendRationale h3 {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 10px;
+    }
+
+    .trend-row {
+      display: flex;
+      gap: 10px;
+      padding: 8px 12px;
+      margin-bottom: 6px;
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 8px;
+      font-size: 0.82rem;
+    }
+
+    .trend-indicator {
+      width: 130px;
+      flex-shrink: 0;
+      color: #6ee7f7;
+      font-weight: 600;
+    }
+
+    .trend-detail {
+      color: #94a3b8;
+      line-height: 1.5;
+    }
+
+    .trend-verdict {
+      margin-top: 10px;
+      padding: 10px 14px;
+      background: #1e2130;
+      border-left: 3px solid #a78bfa;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      color: #cbd5e1;
+      font-style: italic;
     }
 
     #downloadBtn {
@@ -246,6 +361,18 @@
     <div id="resultsSection">
       <h2>Analysis Preview</h2>
       <div id="resultsPreview"></div>
+
+      <div id="scoreBreakdown">
+        <h3>Sentiment Score Breakdown</h3>
+        <div id="scoreRows"></div>
+      </div>
+
+      <div id="trendRationale">
+        <h3>Market Trend Rationale</h3>
+        <div id="trendRows"></div>
+        <div class="trend-verdict" id="trendVerdict"></div>
+      </div>
+
       <button id="downloadBtn" onclick="downloadPDF()">
         <span class="icon">&#8675;</span> Download PDF Report
       </button>
@@ -276,6 +403,8 @@
       document.getElementById("startBtn").disabled = false;
       document.getElementById("statusArea").classList.remove("active");
       document.getElementById("progressFill").style.width = "0%";
+      document.getElementById("scoreBreakdown").classList.remove("visible");
+      document.getElementById("trendRationale").classList.remove("visible");
     }
 
     async function startAnalysis() {
@@ -340,6 +469,48 @@
           ];
 
           document.getElementById("resultsPreview").textContent = lines.join("\n");
+
+          // Render sentiment breakdown
+          const bd = p.sentimentBreakdown || {};
+          const LABELS = {
+            consumerReputation:   "Consumer Reputation",
+            marketPerformance:    "Market Performance",
+            brandAwareness:       "Brand Awareness",
+            priceCompetitiveness: "Price Competitiveness",
+            channelCoverage:      "Channel Coverage",
+          };
+          const rows = Object.entries(LABELS).map(([key, label]) => {
+            const dim = bd[key] || {};
+            const score = dim.score ?? 0;
+            const weight = dim.weight ? `×${(dim.weight * 100).toFixed(0)}%` : "";
+            return `<div class="score-row">
+              <span class="score-label">${label}</span>
+              <div class="score-bar-track"><div class="score-bar-fill" style="width:${score}%"></div></div>
+              <span class="score-num">${score}</span>
+              <span class="score-weight">${weight}</span>
+            </div>`;
+          }).join("");
+          document.getElementById("scoreRows").innerHTML = rows;
+          document.getElementById("scoreBreakdown").classList.add("visible");
+
+          // Render market trend rationale
+          const tr = p.marketTrendRationale || {};
+          const TREND_LABELS = {
+            revenueGrowth:    "Revenue Growth",
+            expansionSignals: "Expansion Signals",
+            marketShare:      "Market Share",
+            demandSignals:    "Demand Signals",
+          };
+          const trendRows = Object.entries(TREND_LABELS).map(([key, label]) =>
+            `<div class="trend-row">
+              <span class="trend-indicator">${label}</span>
+              <span class="trend-detail">${tr[key] || "—"}</span>
+            </div>`
+          ).join("");
+          document.getElementById("trendRows").innerHTML = trendRows;
+          document.getElementById("trendVerdict").textContent = tr.verdict || "";
+          document.getElementById("trendRationale").classList.add("visible");
+
           document.getElementById("resultsSection").classList.add("visible");
           document.getElementById("downloadBtn").classList.add("visible");
         }, 500);
