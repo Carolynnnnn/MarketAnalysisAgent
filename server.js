@@ -7,7 +7,7 @@ const cors    = require('cors');
 const path    = require('path');
 const fs      = require('fs');
 
-const { analyzeBrand } = require('./analyzer');
+const { analyzeBrand, BrandNotFoundError } = require('./analyzer');
 const { generatePDF }  = require('./pdfGenerator');
 
 const app  = express();
@@ -57,7 +57,11 @@ app.post('/analyze', async (req, res) => {
     log('info', 'ANALYZE', `Analysis complete. Sentiment: ${analysis.sentimentScore}, Trend: ${analysis.marketTrend}, Dimensions: ${analysis.dimensions.length}`);
   } catch (err) {
     const detail = err.response?.data?.error?.message ?? err.message ?? String(err);
-    log('error', 'ANALYZE', 'Claude analysis failed.', detail);
+    if (err instanceof BrandNotFoundError) {
+      log('warn', 'ANALYZE', `Brand not found: "${brandName}".`, err.reason);
+      return res.status(404).json({ success: false, brandNotFound: true, error: detail });
+    }
+    log('error', 'ANALYZE', 'Analysis failed.', detail);
     return res.status(502).json({ success: false, error: `AI analysis failed: ${detail}` });
   }
 

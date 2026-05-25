@@ -3,10 +3,73 @@
 require('dotenv').config({ override: true });
 const axios = require('axios');
 
-const MODEL = 'gemini-2.5-flash-lite';
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+const MODEL       = 'gemini-2.5-flash-lite';
+const GEMINI_URL  = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 
-// ─── System prompt ────────────────────────────────────────────────────────────
+// Confidence threshold for Stage A: below this → reject without Stage B
+const CONFIDENCE_THRESHOLD = 70;
+
+// ─── Custom error for unrecognised brands ─────────────────────────────────────
+class BrandNotFoundError extends Error {
+  constructor(brandName, reason) {
+    super(`Brand "${brandName}" could not be verified: ${reason}`);
+    this.name = 'BrandNotFoundError';
+    this.brandName = brandName;
+    this.reason = reason;
+  }
+}
+
+// ─── Shared axios helper ──────────────────────────────────────────────────────
+function buildAxiosConfig(proxyConfig) {
+  return {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 120_000,
+    proxy: proxyConfig,
+  };
+}
+
+function getProxyConfig() {
+  const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
+  if (!proxyUrl) return false;
+  const u = new URL(proxyUrl);
+  return { host: u.hostname, port: Number(u.port), protocol: u.protocol };
+}
+
+async function callGemini(prompt, systemPrompt, proxyConfig, maxTokens = 4096) {
+  const body = {
+    system_instruction: { parts: [{ text: systemPrompt }] },
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.2, maxOutputTokens: maxTokens },
+  };
+  const res = await axios.post(
+    `${GEMINI_URL}?key=${process.env.GOOGLE_API_KEY}`,
+    body,
+    buildAxiosConfig(proxyConfig),
+  );
+  const text = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text || !text.trim()) throw new Error('Gemini returned no text output.');
+  return text;
+}
+
+// ─── JSON extraction ──────────────────────────────────────────────────────────
+function extractJSON(raw) {
+  try { return JSON.parse(raw); } catch (_) {}
+
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) {
+    try { return JSON.parse(fenced[1].trim()); } catch (_) {}
+  }
+
+  const first = raw.indexOf('{');
+  const last  = raw.lastIndexOf('}');
+  if (first !== -1 && last > first) {
+    try { return JSON.parse(raw.slice(first, last + 1)); } catch (_) {}
+  }
+
+  throw new Error('Model response could not be parsed as JSON.');
+}
+
+// ─── Stage A — full analysis prompt (includes brand existence fields) ─────────
 const SYSTEM_PROMPT = `\
 You are a senior market analyst specializing in China's consumer market.
 Use your knowledge to provide accurate, detailed information about the brand.
@@ -22,13 +85,21 @@ OUTPUT INSTRUCTIONS:
 - Do not include any text before or after the JSON object.
 - The JSON must exactly match the schema described in the user message.`;
 
-// ─── User prompt ─────────────────────────────────────────────────────────────
 function buildPrompt(brandName) {
   return `\
 Analyze the brand "${brandName}" in China's consumer market.
-Cover each of the following 5 dimensions thoroughly.
 
-DIMENSIONS TO COVER:
+STEP 0 — BRAND EXISTENCE CHECK (fill this before anything else):
+Assess whether "${brandName}" is a real, verifiable brand or company.
+- brandExists: true if you have concrete knowledge of this brand; false if it appears fictional, misspelled, or completely unknown.
+- brandConfidence: integer 0–100 reflecting how certain you are that this brand exists.
+  100 = globally recognized brand; 70 = regionally known; 50 = uncertain; <50 = likely fake or unknown.
+- brandConfidenceRationale: one sentence explaining your confidence level.
+
+If brandExists is false OR brandConfidence < ${CONFIDENCE_THRESHOLD}, still return the full JSON schema but
+fill all analysis fields with empty strings or empty arrays — do NOT fabricate analysis data for non-existent brands.
+
+DIMENSIONS TO COVER (only if brand exists and confidence ≥ ${CONFIDENCE_THRESHOLD}):
 1. Price Analysis       — current pricing tiers, price perception, value positioning in China
 2. Core Selling Points  — key product features, USPs, innovation, brand identity
 3. Sales Channels       — online platforms (Tmall, JD, Douyin, Pinduoduo), offline retail, distribution model
@@ -46,7 +117,6 @@ Score each dimension 0–100 first, then apply the weights below:
   5. Channel Coverage     (10%) — breadth of online + offline distribution footprint
 
 Formula: sentimentScore = round(D1×0.30 + D2×0.25 + D3×0.20 + D4×0.15 + D5×0.10)
-Also include the sub-scores in the "sentimentBreakdown" field (see schema).
 
 Score anchors:
   90–100 = industry leader, overwhelmingly positive
@@ -56,36 +126,20 @@ Score anchors:
   0–29   = severe crisis or market exit risk
 
 MARKET TREND RUBRIC:
-Determine marketTrend based on the following four indicators. Evaluate each, then pick the trend:
+Determine marketTrend based on four indicators (majority vote):
+  1. Revenue / GMV growth (YoY): >10% → growing | -5%~+10% → stable | <-5% → declining
+  2. Store / SKU expansion: net new → growing | flat → stable | closures/cuts → declining
+  3. Market share vs top 3 competitors: gaining → growing | flat → stable | losing → declining
+  4. Consumer demand signals (search, social, downloads): upward → growing | flat → stable | downward → declining
 
-  1. Revenue / GMV growth (most recent full year vs. prior year)
-     — >10% YoY growth      → supports "growing"
-     — -5% to +10%          → supports "stable"
-     — <-5% YoY decline     → supports "declining"
-
-  2. Store / SKU expansion
-     — Net new locations or product lines added → supports "growing"
-     — Flat footprint                           → supports "stable"
-     — Store closures or SKU cuts               → supports "declining"
-
-  3. Market share trajectory (vs. top 3 competitors)
-     — Share gaining          → supports "growing"
-     — Share roughly flat     → supports "stable"
-     — Share losing           → supports "declining"
-
-  4. Consumer demand signals (search index, social buzz, app downloads)
-     — Clear upward trend     → supports "growing"
-     — Flat                   → supports "stable"
-     — Clear downward trend   → supports "declining"
-
-Decision rule: majority of the 4 indicators determines the trend.
-If data is insufficient for an indicator, note it in marketTrendRationale and weight the remaining ones equally.
-
-Return ONLY this JSON object. No markdown fences, no extra text, no explanation:
+Return ONLY this JSON object:
 
 {
   "brand": "${brandName}",
   "analysisTimestamp": "<ISO 8601 datetime>",
+  "brandExists": <true | false>,
+  "brandConfidence": <integer 0-100>,
+  "brandConfidenceRationale": "<1 sentence>",
   "sentimentScore": <weighted composite integer 0-100>,
   "sentimentBreakdown": {
     "consumerReputation":    { "score": <0-100>, "weight": 0.30, "rationale": "<1 sentence>" },
@@ -96,103 +150,90 @@ Return ONLY this JSON object. No markdown fences, no extra text, no explanation:
   },
   "marketTrend": "<growing | stable | declining>",
   "marketTrendRationale": {
-    "revenueGrowth":     "<indicator assessment + data point>",
-    "expansionSignals":  "<indicator assessment + data point>",
-    "marketShare":       "<indicator assessment + data point>",
-    "demandSignals":     "<indicator assessment + data point>",
-    "verdict":           "<1 sentence summary of why this trend was chosen>"
+    "revenueGrowth":    "<indicator assessment + data point>",
+    "expansionSignals": "<indicator assessment + data point>",
+    "marketShare":      "<indicator assessment + data point>",
+    "demandSignals":    "<indicator assessment + data point>",
+    "verdict":          "<1 sentence summary>"
   },
   "strategicInsights": ["<insight>", "<insight>", "<insight>"],
-  "recommendations": ["<recommendation>", "<recommendation>", "<recommendation>"],
+  "recommendations":   ["<recommendation>", "<recommendation>", "<recommendation>"],
   "dimensions": [
-    {
-      "id": "D1",
-      "title": "Price Analysis",
-      "summary": "<2-3 sentence overview>",
-      "insights": ["<bullet insight>", "<bullet insight>", "<bullet insight>"],
-      "conclusion": "<1 sentence strategic takeaway>"
-    },
-    {
-      "id": "D2",
-      "title": "Core Selling Points",
-      "summary": "<2-3 sentence overview>",
-      "insights": ["<bullet insight>", "<bullet insight>", "<bullet insight>"],
-      "conclusion": "<1 sentence strategic takeaway>"
-    },
-    {
-      "id": "D3",
-      "title": "Sales Channels",
-      "summary": "<2-3 sentence overview>",
-      "insights": ["<bullet insight>", "<bullet insight>", "<bullet insight>"],
-      "conclusion": "<1 sentence strategic takeaway>"
-    },
-    {
-      "id": "D4",
-      "title": "Target Audience",
-      "summary": "<2-3 sentence overview>",
-      "insights": ["<bullet insight>", "<bullet insight>", "<bullet insight>"],
-      "conclusion": "<1 sentence strategic takeaway>"
-    },
-    {
-      "id": "D5",
-      "title": "Competitive Landscape",
-      "summary": "<2-3 sentence overview>",
-      "insights": ["<bullet insight>", "<bullet insight>", "<bullet insight>"],
-      "conclusion": "<1 sentence strategic takeaway>"
-    }
+    { "id": "D1", "title": "Price Analysis",        "summary": "", "insights": [], "conclusion": "" },
+    { "id": "D2", "title": "Core Selling Points",   "summary": "", "insights": [], "conclusion": "" },
+    { "id": "D3", "title": "Sales Channels",        "summary": "", "insights": [], "conclusion": "" },
+    { "id": "D4", "title": "Target Audience",       "summary": "", "insights": [], "conclusion": "" },
+    { "id": "D5", "title": "Competitive Landscape", "summary": "", "insights": [], "conclusion": "" }
   ]
 }`;
 }
 
-// ─── JSON extraction ──────────────────────────────────────────────────────────
-function extractJSON(raw) {
-  try {
-    return JSON.parse(raw);
-  } catch (_) {}
-
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenced) {
-    try {
-      return JSON.parse(fenced[1].trim());
-    } catch (_) {}
-  }
-
-  const first = raw.indexOf('{');
-  const last  = raw.lastIndexOf('}');
-  if (first !== -1 && last > first) {
-    try {
-      return JSON.parse(raw.slice(first, last + 1));
-    } catch (_) {}
-  }
-
-  throw new Error('Model response could not be parsed as JSON.');
-}
-
-// ─── Validate shape ───────────────────────────────────────────────────────────
+// ─── Stage A — validate JSON shape + brand existence ─────────────────────────
 function validate(data, brandName) {
   if (!data || typeof data !== 'object') throw new Error('Parsed value is not an object.');
 
-  const required = ['brand', 'analysisTimestamp', 'sentimentScore', 'sentimentBreakdown',
-                    'marketTrend', 'marketTrendRationale', 'strategicInsights', 'recommendations', 'dimensions'];
+  const required = [
+    'brand', 'analysisTimestamp',
+    'brandExists', 'brandConfidence', 'brandConfidenceRationale',
+    'sentimentScore', 'sentimentBreakdown',
+    'marketTrend', 'marketTrendRationale',
+    'strategicInsights', 'recommendations', 'dimensions',
+  ];
   for (const key of required) {
     if (!(key in data)) throw new Error(`Missing required field: "${key}".`);
+  }
+
+  // Stage A brand existence gate
+  if (data.brandExists === false) {
+    throw new BrandNotFoundError(brandName,
+      `model flagged it as non-existent (confidence: ${data.brandConfidence}). ${data.brandConfidenceRationale}`);
+  }
+  if (data.brandConfidence < CONFIDENCE_THRESHOLD) {
+    throw new BrandNotFoundError(brandName,
+      `confidence too low (${data.brandConfidence}/${CONFIDENCE_THRESHOLD}). ${data.brandConfidenceRationale}`);
   }
 
   if (!Array.isArray(data.dimensions) || data.dimensions.length !== 5) {
     throw new Error(`Expected 5 dimensions, got ${data.dimensions?.length ?? 0}.`);
   }
-
   for (const dim of data.dimensions) {
     for (const f of ['id', 'title', 'summary', 'insights', 'conclusion']) {
-      if (!(f in dim)) throw new Error(`Dimension "${dim.id ?? '?'}" is missing field "${f}".`);
+      if (!(f in dim)) throw new Error(`Dimension "${dim.id ?? '?'}" missing field "${f}".`);
     }
-    if (!Array.isArray(dim.insights)) {
-      throw new Error(`Dimension "${dim.id}" insights must be an array.`);
-    }
+    if (!Array.isArray(dim.insights)) throw new Error(`Dimension "${dim.id}" insights must be an array.`);
   }
 
   data.brand = brandName;
   return data;
+}
+
+// ─── Stage B — lightweight independent verification ───────────────────────────
+const VERIFY_SYSTEM = `You are a factual brand verification assistant.
+Answer ONLY with a valid JSON object — no markdown, no extra text.`;
+
+async function verifyBrandExists(brandName, proxyConfig) {
+  const prompt = `\
+Is "${brandName}" a real, verifiable brand, company, or product that genuinely exists
+in China's consumer market or is internationally known?
+
+Criteria for "verified: true":
+- You can name its founder, headquarters, founding year, or flagship products
+- It has documented revenue, retail presence, or media coverage
+- It is not a typo, fictional entity, or generic phrase
+
+Return ONLY this JSON:
+{
+  "verified": <true | false>,
+  "reason": "<one sentence explaining your decision>"
+}`;
+
+  const text = await callGemini(prompt, VERIFY_SYSTEM, proxyConfig, 256);
+  const data = extractJSON(text);
+
+  if (typeof data.verified !== 'boolean') {
+    throw new Error('Stage B verification returned unexpected format.');
+  }
+  return data; // { verified, reason }
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
@@ -201,31 +242,21 @@ async function analyzeBrand(brandName) {
     throw new Error('GOOGLE_API_KEY is not set in environment variables.');
   }
 
-  // Read proxy from environment (HTTP_PROXY / HTTPS_PROXY) so Node.js uses it like curl does
-  const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
-  let proxyConfig = false;
-  if (proxyUrl) {
-    const u = new URL(proxyUrl);
-    proxyConfig = { host: u.hostname, port: Number(u.port), protocol: u.protocol };
+  const proxy = getProxyConfig();
+
+  // ── Stage A: full analysis + embedded brand existence check ─────────────────
+  const rawText = await callGemini(buildPrompt(brandName), SYSTEM_PROMPT, proxy);
+  const parsed  = extractJSON(rawText);
+  const analysis = validate(parsed, brandName); // throws BrandNotFoundError if A fails
+
+  // ── Stage B: independent lightweight verification ────────────────────────────
+  const verification = await verifyBrandExists(brandName, proxy);
+  if (!verification.verified) {
+    throw new BrandNotFoundError(brandName,
+      `failed independent verification — ${verification.reason}`);
   }
 
-  const response = await axios.post(
-    `${GEMINI_URL}?key=${process.env.GOOGLE_API_KEY}`,
-    {
-      system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      contents: [{ role: 'user', parts: [{ text: buildPrompt(brandName) }] }],
-      generationConfig: { temperature: 0.2, maxOutputTokens: 4096 },
-    },
-    { headers: { 'Content-Type': 'application/json' }, timeout: 120_000, proxy: proxyConfig },
-  );
-
-  const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text || !text.trim()) {
-    throw new Error('Gemini returned no text output.');
-  }
-
-  const parsed = extractJSON(text);
-  return validate(parsed, brandName);
+  return analysis;
 }
 
-module.exports = { analyzeBrand };
+module.exports = { analyzeBrand, BrandNotFoundError };

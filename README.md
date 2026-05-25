@@ -21,6 +21,7 @@ Enter a brand name, and the agent will:
 | 5-Dimension Analysis | Price, Core Selling Points, Sales Channels, Target Audience, Competitive Landscape |
 | Sentiment Score | Weighted composite score (0–100) across 5 sub-dimensions with progress-bar breakdown |
 | Market Trend | `growing / stable / declining` verdict backed by 4 explicit indicators with per-indicator rationale |
+| **Two-stage brand validation** | Stage A (embedded in analysis) + Stage B (independent lightweight check) — rejects fictional or misspelled brands before generating a report |
 | PDF Report | Cover page, Table of Contents, one full page per dimension — generated via PDFKit |
 | Live progress UI | Animated step-by-step status bar while the analysis runs |
 
@@ -202,6 +203,36 @@ Stream a previously generated PDF report to the browser.
 | 5 | Dimension 3: Sales Channels |
 | 6 | Dimension 4: Target Audience |
 | 7 | Dimension 5: Competitive Landscape |
+
+---
+
+## Brand Validation
+
+Every analysis request passes through a two-stage validation pipeline before a PDF is generated.
+
+### Stage A — Embedded existence check (inside main analysis call)
+
+The Gemini model is asked to self-assess two fields alongside the full analysis:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `brandExists` | boolean | Whether the model recognises this as a real brand |
+| `brandConfidence` | 0–100 | Certainty level: 100 = globally known, 70 = regionally known, <50 = unknown/fictional |
+| `brandConfidenceRationale` | string | One-sentence explanation |
+
+**Gate:** if `brandExists === false` OR `brandConfidence < 70` → request is rejected immediately with HTTP 404. Stage B is skipped (no extra API call).
+
+### Stage B — Independent lightweight verification (only runs if A passes)
+
+A separate, minimal Gemini call asks a single yes/no question:
+
+> *"Is this brand a real, verifiable company with documented revenue, retail presence, or media coverage?"*
+
+Returns `{ "verified": true/false, "reason": "..." }`. If `verified === false` → rejected with HTTP 404.
+
+### UI behaviour on rejection
+
+The status bar shows a clear message: `⚠️ Brand not recognised: "...". Please check the spelling or try a different brand.` The message auto-dismisses after 6 seconds.
 
 ---
 

@@ -439,7 +439,12 @@
         clearInterval(stepTimer);
 
         if (!res.ok || !data.success) {
-          throw new Error(data.error || "Unknown server error.");
+          const err = new Error(data.error || "Unknown server error.");
+          if (data.brandNotFound) {
+            err.brandNotFound = true;
+            err.brandName = brand;
+          }
+          throw err;
         }
 
         // Complete progress bar
@@ -519,9 +524,14 @@
         clearInterval(stepTimer);
         resetUI();
         document.getElementById("statusArea").classList.add("active");
-        document.getElementById("statusText").textContent = "Error: " + err.message;
         document.getElementById("progressFill").style.width = "0%";
-        setTimeout(resetUI, 4000);
+        if (err.brandNotFound) {
+          document.getElementById("statusText").textContent =
+            `⚠️ Brand not recognised: "${err.brandName}". Please check the spelling or try a different brand.`;
+        } else {
+          document.getElementById("statusText").textContent = "Error: " + err.message;
+        }
+        setTimeout(resetUI, 6000);
       }
     }
 
