@@ -9,8 +9,10 @@ An AI-powered web application that generates structured China market analysis re
 Enter a brand name, and the agent will:
 
 1. Call the **Google Gemini API** to produce a detailed 5-dimension market analysis in structured JSON
-2. Render an **inline preview** with scored metrics directly in the browser
-3. Generate a **professional 7-page PDF report** (A4) available for one-click download
+2. Validate the brand through a two-stage existence check before generating any report
+3. Audit the analysis for vague language and missing specifics (Stage C quality check)
+4. Render an **inline preview** with scored metrics, quality badge, and issue list in the browser
+5. Generate a **professional 7-page PDF report** (A4) available for one-click download
 
 ---
 
@@ -22,6 +24,7 @@ Enter a brand name, and the agent will:
 | Sentiment Score | Weighted composite score (0–100) across 5 sub-dimensions with progress-bar breakdown |
 | Market Trend | `growing / stable / declining` verdict backed by 4 explicit indicators with per-indicator rationale |
 | **Two-stage brand validation** | Stage A (embedded in analysis) + Stage B (independent lightweight check) — rejects fictional or misspelled brands before generating a report |
+| **Data quality audit (Stage C)** | Independent Gemini call audits the analysis for vague language, missing specifics, and potentially fabricated figures — score shown in UI with per-issue breakdown |
 | PDF Report | Cover page, Table of Contents, one full page per dimension — generated via PDFKit |
 | Live progress UI | Animated step-by-step status bar while the analysis runs |
 
@@ -30,7 +33,7 @@ Enter a brand name, and the agent will:
 ## Tech Stack
 
 - **Runtime**: Node.js + Express 5
-- **AI Model**: Google Gemini `gemini-2.5-flash-lite` via REST API (axios)
+- **AI Model**: Google Gemini `gemini-flash-latest` via REST API (axios)
 - **PDF**: PDFKit
 - **Frontend**: Vanilla HTML/CSS/JS (single `index.html`)
 
@@ -236,11 +239,43 @@ The status bar shows a clear message: `⚠️ Brand not recognised: "...". Pleas
 
 ---
 
+## Data Quality Audit (Stage C)
+
+After brand validation passes, a third Gemini call audits the generated analysis for data quality.
+
+### What is checked
+
+| Issue type | Meaning |
+|---|---|
+| `VAGUE_LANGUAGE` | Words like "many / various / several / significant" used without a specific number |
+| `MISSING_SPECIFICS` | Claims with no year, %, ¥ figure, or named entity |
+| `FABRICATED` | Numbers that appear invented or implausibly precise |
+
+A server-side regex pre-scan also flags common vague words before the AI audit, so obvious issues are caught even if the AI misses them.
+
+### Quality score
+
+| Range | Meaning |
+|---|---|
+| 90–100 | All claims are specific and verifiable — green ✓ |
+| 70–89 | Mostly specific with minor gaps — yellow ⚠ |
+| Below 70 | Pervasive vagueness or missing data — pipeline retries once |
+
+### Retry behaviour
+
+If the first analysis scores below 70, the pipeline automatically retries Stage A with targeted feedback: it lists the exact failing excerpts and instructs the model to fix them. The retry result is used for both the preview and the PDF.
+
+### Graceful degradation
+
+If the audit API call itself fails (e.g. quota exhausted), the analysis and PDF are still returned. The quality section in the UI shows a blue `?` badge and an "Audit unavailable" message — the report is not blocked.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `GOOGLE_API_KEY is not set` | `.env` not created or not loaded | Create `.env` from `.env.example` |
-| `429 Quota exceeded` | Free-tier rate limit hit | Wait 60 s and retry, or upgrade API plan |
+| `429 Quota exceeded` | Free-tier rate limit hit | The server retries automatically (up to 3×); if it persists, wait 60 s or upgrade API plan |
 | `TLS connection failed` | Behind a proxy | Set `HTTPS_PROXY` and `HTTP_PROXY` in `.env` |
-| `Model response could not be parsed as JSON` | Model returned markdown fences | Transient — retry; the prompt instructs plain JSON output |
+| `Model response could not be parsed as JSON` | Transient model output issue | Retry the request; the prompt instructs plain JSON output |

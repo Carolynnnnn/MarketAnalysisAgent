@@ -33,4 +33,6 @@ This rule exists so that `README.md` always reflects the actual state of the pro
 
 - **axios over fetch / SDK**: Node.js native fetch (undici) is blocked in the sandbox; axios uses Node's `http` module which respects the proxy config and works correctly.
 - **dotenv override:true**: The shell environment pre-sets `ANTHROPIC_API_KEY` and other vars to empty strings; without `override:true` dotenv silently skips them.
-- **gemini-2.5-flash-lite model**: Chosen because it has free-tier quota available on this API key. `gemini-2.0-flash` and `gemini-1.5-flash` have exhausted free quota.
+- **gemini-flash-latest model**: `gemini-2.5-flash-lite` and `gemini-2.0-flash` have exhausted their free-tier quota on this key. `gemini-flash-latest` (resolves to gemini-3.5-flash / gemini-2.5-flash) has remaining quota.
+- **thinkingBudget: 0 is mandatory**: `gemini-flash-latest` uses built-in extended thinking by default. Thinking tokens count against `maxOutputTokens`, so with the default 4 096 limit the model spent ~3 900 tokens thinking and only ~141 on visible output — causing `MAX_TOKENS` and truncated JSON. Setting `thinkingConfig: { thinkingBudget: 0 }` disables this and reserves all output tokens for the actual response.
+- **429 auto-retry in callGemini**: Free-tier rate limit is 20 req/min. `callGemini` retries up to 3 times, waiting the exact `retry in Xs` duration from the error message before each attempt.

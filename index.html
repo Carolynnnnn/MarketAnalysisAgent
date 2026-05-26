@@ -301,6 +301,78 @@
       font-style: italic;
     }
 
+    #qualityReport {
+      display: none;
+      margin-bottom: 20px;
+    }
+
+    #qualityReport.visible { display: block; }
+
+    #qualityReport h3 {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 10px;
+    }
+
+    .quality-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+
+    .quality-header.pass  { background: #052e16; border: 1px solid #166534; }
+    .quality-header.warn  { background: #1c1a05; border: 1px solid #854d0e; }
+    .quality-header.retry { background: #0f172a; border: 1px solid #1e40af; }
+
+    .quality-badge {
+      font-size: 1.3rem;
+      font-weight: 700;
+      min-width: 44px;
+      text-align: center;
+    }
+
+    .quality-badge.pass  { color: #4ade80; }
+    .quality-badge.warn  { color: #facc15; }
+
+    .quality-meta { flex: 1; }
+    .quality-meta .q-score { font-size: 0.9rem; font-weight: 600; color: #e2e8f0; }
+    .quality-meta .q-summary { font-size: 0.8rem; color: #94a3b8; margin-top: 2px; line-height: 1.4; }
+
+    .quality-issue {
+      display: flex;
+      gap: 8px;
+      padding: 7px 12px;
+      margin-bottom: 5px;
+      background: #0f1117;
+      border: 1px solid #2d3148;
+      border-radius: 7px;
+      font-size: 0.78rem;
+    }
+
+    .issue-type {
+      flex-shrink: 0;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-weight: 700;
+      font-size: 0.7rem;
+      align-self: flex-start;
+      margin-top: 1px;
+    }
+
+    .issue-type.VAGUE_LANGUAGE    { background: #422006; color: #fb923c; }
+    .issue-type.MISSING_SPECIFICS { background: #1e1b4b; color: #a5b4fc; }
+    .issue-type.FABRICATED        { background: #3b0764; color: #e879f9; }
+
+    .issue-body { flex: 1; color: #94a3b8; line-height: 1.5; }
+    .issue-excerpt { color: #cbd5e1; font-style: italic; }
+    .issue-suggestion { color: #64748b; font-size: 0.75rem; margin-top: 2px; }
+
     #downloadBtn {
       display: none;
       width: 100%;
@@ -373,6 +445,12 @@
         <div class="trend-verdict" id="trendVerdict"></div>
       </div>
 
+      <div id="qualityReport">
+        <h3>Data Quality Audit</h3>
+        <div id="qualityHeader"></div>
+        <div id="qualityIssues"></div>
+      </div>
+
       <button id="downloadBtn" onclick="downloadPDF()">
         <span class="icon">&#8675;</span> Download PDF Report
       </button>
@@ -405,6 +483,7 @@
       document.getElementById("progressFill").style.width = "0%";
       document.getElementById("scoreBreakdown").classList.remove("visible");
       document.getElementById("trendRationale").classList.remove("visible");
+      document.getElementById("qualityReport").classList.remove("visible");
     }
 
     async function startAnalysis() {
@@ -515,6 +594,37 @@
           document.getElementById("trendRows").innerHTML = trendRows;
           document.getElementById("trendVerdict").textContent = tr.verdict || "";
           document.getElementById("trendRationale").classList.add("visible");
+
+          // Render data quality report
+          const qr = p.qualityReport || {};
+          const unavailable = qr.unavailable ?? false;
+          const score = qr.qualityScore ?? "—";
+          const passed = qr.passed ?? false;
+          const retried = qr.wasRetried ?? false;
+          const statusClass = unavailable ? "retry" : (passed ? "pass" : "warn");
+          const statusIcon  = unavailable ? "?" : (passed ? "✓" : "⚠");
+          const retryNote   = retried ? ' <span style="color:#60a5fa;font-size:0.75rem">(auto-retried)</span>' : "";
+
+          document.getElementById("qualityHeader").innerHTML = `
+            <div class="quality-header ${statusClass}">
+              <div class="quality-badge ${statusClass}">${statusIcon} ${score}</div>
+              <div class="quality-meta">
+                <div class="q-score">${passed ? "Quality Check Passed" : "Quality Warnings Detected"}${retryNote}</div>
+                <div class="q-summary">${qr.summary || ""}</div>
+              </div>
+            </div>`;
+
+          const issues = (qr.issues || []).slice(0, 8);
+          document.getElementById("qualityIssues").innerHTML = issues.map(i => `
+            <div class="quality-issue">
+              <span class="issue-type ${i.type}">${i.type.replace(/_/g," ")}</span>
+              <div class="issue-body">
+                <div class="issue-excerpt">"${i.excerpt}"</div>
+                <div class="issue-suggestion">→ ${i.suggestion}</div>
+              </div>
+            </div>`).join("");
+
+          document.getElementById("qualityReport").classList.add("visible");
 
           document.getElementById("resultsSection").classList.add("visible");
           document.getElementById("downloadBtn").classList.add("visible");

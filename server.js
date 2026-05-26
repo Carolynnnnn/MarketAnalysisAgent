@@ -91,6 +91,7 @@ app.post('/analyze', async (req, res) => {
     sentimentBreakdown:    analysis.sentimentBreakdown ?? {},
     marketTrend:           analysis.marketTrend,
     marketTrendRationale:  analysis.marketTrendRationale ?? {},
+    qualityReport:         analysis.qualityReport ?? {},
     strategicInsights:   (analysis.strategicInsights ?? []).slice(0, 3),
     recommendations:     (analysis.recommendations   ?? []).slice(0, 3),
     dimensions:          (analysis.dimensions ?? []).map(({ id, title, summary, conclusion }) => ({

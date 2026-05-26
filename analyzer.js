@@ -3,13 +3,13 @@
 require('dotenv').config({ override: true });
 const axios = require('axios');
 
-const MODEL       = 'gemini-2.5-flash-lite';
-const GEMINI_URL  = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+const MODEL      = 'gemini-flash-latest';
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 
-// Confidence threshold for Stage A: below this → reject without Stage B
 const CONFIDENCE_THRESHOLD = 70;
+const QUALITY_THRESHOLD    = 70;  // Stage C minimum score to pass without warning
 
-// ─── Custom error for unrecognised brands ─────────────────────────────────────
+// ─── Custom errors ────────────────────────────────────────────────────────────
 class BrandNotFoundError extends Error {
   constructor(brandName, reason) {
     super(`Brand "${brandName}" could not be verified: ${reason}`);
@@ -19,162 +19,177 @@ class BrandNotFoundError extends Error {
   }
 }
 
-// ─── Shared axios helper ──────────────────────────────────────────────────────
-function buildAxiosConfig(proxyConfig) {
-  return {
-    headers: { 'Content-Type': 'application/json' },
-    timeout: 120_000,
-    proxy: proxyConfig,
-  };
-}
-
+// ─── Proxy + Gemini helpers ───────────────────────────────────────────────────
 function getProxyConfig() {
-  const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
-  if (!proxyUrl) return false;
-  const u = new URL(proxyUrl);
+  const url = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
+  if (!url) return false;
+  const u = new URL(url);
   return { host: u.hostname, port: Number(u.port), protocol: u.protocol };
 }
 
-async function callGemini(prompt, systemPrompt, proxyConfig, maxTokens = 4096) {
-  const body = {
-    system_instruction: { parts: [{ text: systemPrompt }] },
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0.2, maxOutputTokens: maxTokens },
-  };
-  const res = await axios.post(
-    `${GEMINI_URL}?key=${process.env.GOOGLE_API_KEY}`,
-    body,
-    buildAxiosConfig(proxyConfig),
-  );
-  const text = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text || !text.trim()) throw new Error('Gemini returned no text output.');
-  return text;
+async function callGemini(userPrompt, systemPrompt, proxy, maxTokens = 4096) {
+  const MAX_RETRIES = 3;
+  let lastErr;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const res = await axios.post(
+        `${GEMINI_URL}?key=${process.env.GOOGLE_API_KEY}`,
+        {
+          system_instruction: { parts: [{ text: systemPrompt }] },
+          contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+          generationConfig: { temperature: 0.2, maxOutputTokens: maxTokens, thinkingConfig: { thinkingBudget: 0 } },
+        },
+        { headers: { 'Content-Type': 'application/json' }, timeout: 120_000, proxy },
+      );
+      const cand   = res.data?.candidates?.[0];
+      const reason = cand?.finishReason;
+      const parts  = cand?.content?.parts ?? [];
+      const text   = parts.map(p => p.text ?? '').join('');
+      if (reason && reason !== 'STOP') console.warn(`[GEMINI] finishReason=${reason} len=${text.length} parts=${parts.length}`);
+      if (!text.trim()) throw new Error('Gemini returned no text output.');
+      return text;
+    } catch (err) {
+      lastErr = err;
+      const status  = err.response?.status;
+      const message = err.response?.data?.error?.message ?? '';
+      if (status === 429) {
+        const match   = message.match(/retry in (\d+(\.\d+)?)s/i);
+        const waitMs  = match ? Math.ceil(parseFloat(match[1]) * 1000) + 500 : 15000;
+        if (attempt < MAX_RETRIES) {
+          await new Promise(r => setTimeout(r, waitMs));
+          continue;
+        }
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
 }
 
 // ─── JSON extraction ──────────────────────────────────────────────────────────
 function extractJSON(raw) {
   try { return JSON.parse(raw); } catch (_) {}
-
   const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenced) {
-    try { return JSON.parse(fenced[1].trim()); } catch (_) {}
-  }
-
+  if (fenced) { try { return JSON.parse(fenced[1].trim()); } catch (_) {} }
   const first = raw.indexOf('{');
   const last  = raw.lastIndexOf('}');
   if (first !== -1 && last > first) {
     try { return JSON.parse(raw.slice(first, last + 1)); } catch (_) {}
   }
-
   throw new Error('Model response could not be parsed as JSON.');
 }
 
-// ─── Stage A — full analysis prompt (includes brand existence fields) ─────────
+// ─── Stage A — system prompt ──────────────────────────────────────────────────
 const SYSTEM_PROMPT = `\
 You are a senior market analyst specializing in China's consumer market.
-Use your knowledge to provide accurate, detailed information about the brand.
 
-RESEARCH INSTRUCTIONS:
-- Cover each of the 5 analysis dimensions thoroughly using your knowledge of China's market.
-- Prefer recent data (2023–2025) where available. Cite specific figures, platform names, and competitor names.
-- Do not fabricate data. If a figure is unavailable, state that clearly in the relevant field.
+RESEARCH STANDARDS — these are mandatory, not suggestions:
+- Every quantitative claim MUST include a year or time range (e.g. "in 2024", "as of Q1 2025").
+- Every market-share, revenue, or growth figure MUST include a specific number or percentage.
+  Use named companies, specific platforms (Tmall, JD.com, Douyin, Pinduoduo), and real city names.
+- FORBIDDEN vague words (never use without an accompanying specific number):
+  many · various · several · some · a number of · significant · considerable · substantial ·
+  major · large · small · notable · enormous · huge · growing (as a standalone adjective)
+- If a specific figure is genuinely unavailable, write the exact phrase:
+  "[Data unavailable as of 2024/2025]" — do NOT invent or approximate figures.
+- Do not write generic statements that would apply to any brand in the sector.
 
-OUTPUT INSTRUCTIONS:
-- Output ONLY a single valid JSON object. No other text.
-- Do not wrap the JSON in markdown code fences.
-- Do not include any text before or after the JSON object.
-- The JSON must exactly match the schema described in the user message.`;
+OUTPUT: ONLY a single valid JSON object. No markdown fences. No text before or after.`;
 
-function buildPrompt(brandName) {
-  return `\
+// ─── Stage A — user prompt builder ───────────────────────────────────────────
+function buildPrompt(brandName, qualityFeedback = null) {
+  const retryBlock = qualityFeedback
+    ? `\nIMPORTANT — PREVIOUS ATTEMPT FAILED QUALITY AUDIT:
+Your prior response had ${qualityFeedback.issueCount} data-quality issues. Fix all of them:
+${qualityFeedback.issues.slice(0, 6).map(i => `  • [${i.type}] ${i.location}: "${i.excerpt}" → ${i.suggestion}`).join('\n')}
+Be specific: include real figures, percentages, and years for every claim.\n`
+    : '';
+
+  return `${retryBlock}\
 Analyze the brand "${brandName}" in China's consumer market.
 
-STEP 0 — BRAND EXISTENCE CHECK (fill this before anything else):
-Assess whether "${brandName}" is a real, verifiable brand or company.
-- brandExists: true if you have concrete knowledge of this brand; false if it appears fictional, misspelled, or completely unknown.
-- brandConfidence: integer 0–100 reflecting how certain you are that this brand exists.
-  100 = globally recognized brand; 70 = regionally known; 50 = uncertain; <50 = likely fake or unknown.
-- brandConfidenceRationale: one sentence explaining your confidence level.
+STEP 0 — BRAND EXISTENCE CHECK:
+- brandExists: true if you have concrete knowledge of this brand; false otherwise.
+- brandConfidence: 0–100 (100 = globally known; 70 = regionally known; <50 = uncertain/fictional).
+- brandConfidenceRationale: one sentence.
+If brandExists is false OR brandConfidence < ${CONFIDENCE_THRESHOLD}, fill all analysis fields
+with empty strings/arrays — do NOT fabricate data for unverifiable brands.
 
-If brandExists is false OR brandConfidence < ${CONFIDENCE_THRESHOLD}, still return the full JSON schema but
-fill all analysis fields with empty strings or empty arrays — do NOT fabricate analysis data for non-existent brands.
+DIMENSIONS (only populate if brand verified):
+1. Price Analysis       — pricing tiers with ¥ figures, price-tier positioning, specific competitors' prices
+2. Core Selling Points  — product features with specifics, named innovations, measurable differentiators
+3. Sales Channels       — named platforms and their revenue contribution %, offline store count/regions
+4. Target Audience      — age range, income bracket, city-tier breakdown with % if available
+5. Competitive Landscape — named competitors with estimated market share %, specific advantages/threats
 
-DIMENSIONS TO COVER (only if brand exists and confidence ≥ ${CONFIDENCE_THRESHOLD}):
-1. Price Analysis       — current pricing tiers, price perception, value positioning in China
-2. Core Selling Points  — key product features, USPs, innovation, brand identity
-3. Sales Channels       — online platforms (Tmall, JD, Douyin, Pinduoduo), offline retail, distribution model
-4. Target Audience      — consumer demographics, psychographics, key user segments in China
-5. Competitive Landscape — main competitors, estimated market share, advantages and strategic threats
-
-SENTIMENT SCORE RUBRIC (0–100):
-Calculate sentimentScore as a weighted composite of the following 5 dimensions.
-Score each dimension 0–100 first, then apply the weights below:
-
-  1. Consumer Reputation (30%) — social media sentiment, user ratings, complaint rate, NPS
-  2. Market Performance   (25%) — revenue growth rate, market share trend, store expansion speed
-  3. Brand Awareness      (20%) — aided/unaided awareness, brand prestige, media coverage
-  4. Price Competitiveness(15%) — perceived value-for-money vs. key competitors
-  5. Channel Coverage     (10%) — breadth of online + offline distribution footprint
-
+SENTIMENT SCORE RUBRIC (0–100 weighted composite):
+  1. Consumer Reputation (30%) — social media sentiment, ratings, complaint rate, NPS
+  2. Market Performance   (25%) — revenue growth rate, market share trend, expansion speed
+  3. Brand Awareness      (20%) — awareness scores, prestige, media coverage volume
+  4. Price Competitiveness(15%) — value-for-money perception vs. competitors
+  5. Channel Coverage     (10%) — breadth of online + offline distribution
 Formula: sentimentScore = round(D1×0.30 + D2×0.25 + D3×0.20 + D4×0.15 + D5×0.10)
+Anchors: 90–100 leader | 70–89 strong | 50–69 mixed | 30–49 challenged | 0–29 crisis
 
-Score anchors:
-  90–100 = industry leader, overwhelmingly positive
-  70–89  = strong brand with minor weaknesses
-  50–69  = mixed sentiment, notable risks
-  30–49  = significant challenges, negative trend
-  0–29   = severe crisis or market exit risk
+MARKET TREND RUBRIC (majority vote of 4 indicators):
+  1. Revenue/GMV YoY: >10% → growing | -5%~+10% → stable | <-5% → declining
+  2. Store/SKU expansion: net new → growing | flat → stable | closures → declining
+  3. Market share vs top 3: gaining → growing | flat → stable | losing → declining
+  4. Demand signals (search, social, downloads): up → growing | flat → stable | down → declining
 
-MARKET TREND RUBRIC:
-Determine marketTrend based on four indicators (majority vote):
-  1. Revenue / GMV growth (YoY): >10% → growing | -5%~+10% → stable | <-5% → declining
-  2. Store / SKU expansion: net new → growing | flat → stable | closures/cuts → declining
-  3. Market share vs top 3 competitors: gaining → growing | flat → stable | losing → declining
-  4. Consumer demand signals (search, social, downloads): upward → growing | flat → stable | downward → declining
+DATA QUALITY SELF-REPORT (honest self-assessment):
+- unavailableData: list specific fields where real data was not found and "[Data unavailable]" was used
+- estimatedClaims: list claims that are informed estimates rather than cited facts
+- overallDataAvailability: "high" (>80% specific), "medium" (50–80%), or "low" (<50%)
 
-Return ONLY this JSON object:
-
+Return ONLY this JSON:
 {
   "brand": "${brandName}",
-  "analysisTimestamp": "<ISO 8601 datetime>",
-  "brandExists": <true | false>,
-  "brandConfidence": <integer 0-100>,
+  "analysisTimestamp": "<ISO 8601>",
+  "brandExists": <true|false>,
+  "brandConfidence": <0-100>,
   "brandConfidenceRationale": "<1 sentence>",
-  "sentimentScore": <weighted composite integer 0-100>,
+  "dataQualityReport": {
+    "unavailableData": ["<field: reason>"],
+    "estimatedClaims": ["<claim description>"],
+    "overallDataAvailability": "high|medium|low"
+  },
+  "sentimentScore": <0-100>,
   "sentimentBreakdown": {
-    "consumerReputation":    { "score": <0-100>, "weight": 0.30, "rationale": "<1 sentence>" },
-    "marketPerformance":     { "score": <0-100>, "weight": 0.25, "rationale": "<1 sentence>" },
-    "brandAwareness":        { "score": <0-100>, "weight": 0.20, "rationale": "<1 sentence>" },
-    "priceCompetitiveness":  { "score": <0-100>, "weight": 0.15, "rationale": "<1 sentence>" },
-    "channelCoverage":       { "score": <0-100>, "weight": 0.10, "rationale": "<1 sentence>" }
+    "consumerReputation":    { "score": <0-100>, "weight": 0.30, "rationale": "<specific sentence with data>" },
+    "marketPerformance":     { "score": <0-100>, "weight": 0.25, "rationale": "<specific sentence with data>" },
+    "brandAwareness":        { "score": <0-100>, "weight": 0.20, "rationale": "<specific sentence with data>" },
+    "priceCompetitiveness":  { "score": <0-100>, "weight": 0.15, "rationale": "<specific sentence with data>" },
+    "channelCoverage":       { "score": <0-100>, "weight": 0.10, "rationale": "<specific sentence with data>" }
   },
-  "marketTrend": "<growing | stable | declining>",
+  "marketTrend": "<growing|stable|declining>",
   "marketTrendRationale": {
-    "revenueGrowth":    "<indicator assessment + data point>",
-    "expansionSignals": "<indicator assessment + data point>",
-    "marketShare":      "<indicator assessment + data point>",
-    "demandSignals":    "<indicator assessment + data point>",
-    "verdict":          "<1 sentence summary>"
+    "revenueGrowth":    "<specific % or figure + year>",
+    "expansionSignals": "<specific store count or SKU count + year>",
+    "marketShare":      "<specific % vs named competitors>",
+    "demandSignals":    "<specific platform data or index score>",
+    "verdict":          "<1 sentence with concrete evidence>"
   },
-  "strategicInsights": ["<insight>", "<insight>", "<insight>"],
-  "recommendations":   ["<recommendation>", "<recommendation>", "<recommendation>"],
+  "strategicInsights": ["<specific insight with figures>", "<specific insight with figures>", "<specific insight with figures>"],
+  "recommendations":   ["<actionable recommendation>", "<actionable recommendation>", "<actionable recommendation>"],
   "dimensions": [
-    { "id": "D1", "title": "Price Analysis",        "summary": "", "insights": [], "conclusion": "" },
-    { "id": "D2", "title": "Core Selling Points",   "summary": "", "insights": [], "conclusion": "" },
-    { "id": "D3", "title": "Sales Channels",        "summary": "", "insights": [], "conclusion": "" },
-    { "id": "D4", "title": "Target Audience",       "summary": "", "insights": [], "conclusion": "" },
-    { "id": "D5", "title": "Competitive Landscape", "summary": "", "insights": [], "conclusion": "" }
+    { "id": "D1", "title": "Price Analysis",        "summary": "<specific ¥ figures>", "insights": ["<specific>","<specific>","<specific>"], "conclusion": "<specific takeaway>" },
+    { "id": "D2", "title": "Core Selling Points",   "summary": "<named features>",     "insights": ["<specific>","<specific>","<specific>"], "conclusion": "<specific takeaway>" },
+    { "id": "D3", "title": "Sales Channels",        "summary": "<named platforms+%>",  "insights": ["<specific>","<specific>","<specific>"], "conclusion": "<specific takeaway>" },
+    { "id": "D4", "title": "Target Audience",       "summary": "<age/income range>",   "insights": ["<specific>","<specific>","<specific>"], "conclusion": "<specific takeaway>" },
+    { "id": "D5", "title": "Competitive Landscape", "summary": "<named rivals+share%>","insights": ["<specific>","<specific>","<specific>"], "conclusion": "<specific takeaway>" }
   ]
 }`;
 }
 
-// ─── Stage A — validate JSON shape + brand existence ─────────────────────────
+// ─── Stage A — JSON shape validator ──────────────────────────────────────────
 function validate(data, brandName) {
   if (!data || typeof data !== 'object') throw new Error('Parsed value is not an object.');
 
   const required = [
     'brand', 'analysisTimestamp',
     'brandExists', 'brandConfidence', 'brandConfidenceRationale',
+    'dataQualityReport',
     'sentimentScore', 'sentimentBreakdown',
     'marketTrend', 'marketTrendRationale',
     'strategicInsights', 'recommendations', 'dimensions',
@@ -183,10 +198,9 @@ function validate(data, brandName) {
     if (!(key in data)) throw new Error(`Missing required field: "${key}".`);
   }
 
-  // Stage A brand existence gate
   if (data.brandExists === false) {
     throw new BrandNotFoundError(brandName,
-      `model flagged it as non-existent (confidence: ${data.brandConfidence}). ${data.brandConfidenceRationale}`);
+      `model flagged as non-existent (confidence: ${data.brandConfidence}). ${data.brandConfidenceRationale}`);
   }
   if (data.brandConfidence < CONFIDENCE_THRESHOLD) {
     throw new BrandNotFoundError(brandName,
@@ -207,33 +221,121 @@ function validate(data, brandName) {
   return data;
 }
 
-// ─── Stage B — lightweight independent verification ───────────────────────────
+// ─── Stage B — lightweight brand verification ─────────────────────────────────
 const VERIFY_SYSTEM = `You are a factual brand verification assistant.
 Answer ONLY with a valid JSON object — no markdown, no extra text.`;
 
-async function verifyBrandExists(brandName, proxyConfig) {
-  const prompt = `\
-Is "${brandName}" a real, verifiable brand, company, or product that genuinely exists
-in China's consumer market or is internationally known?
+async function verifyBrandExists(brandName, proxy) {
+  const prompt = `Is "${brandName}" a real, verifiable brand, company, or product that genuinely
+exists in China's consumer market or is internationally known?
 
 Criteria for "verified: true":
 - You can name its founder, headquarters, founding year, or flagship products
 - It has documented revenue, retail presence, or media coverage
 - It is not a typo, fictional entity, or generic phrase
 
-Return ONLY this JSON:
+Return ONLY: { "verified": <true|false>, "reason": "<one sentence>" }`;
+
+  const text = await callGemini(prompt, VERIFY_SYSTEM, proxy, 256);
+  const data = extractJSON(text);
+  if (typeof data.verified !== 'boolean') throw new Error('Stage B: unexpected format.');
+  return data;
+}
+
+// ─── Stage C — data quality audit ────────────────────────────────────────────
+// Server-side pre-scan for obviously vague patterns
+const VAGUE_PATTERNS = [
+  /\bmany\b/i, /\bvarious\b/i, /\bseveral\b/i, /\ba number of\b/i,
+  /\bsome\b(?! stores| stores| outlets)/i,
+  /\bsignificant(ly)?\b(?! \d)/i, /\bconsiderable\b/i, /\bsubstantial\b/i,
+  /\bwidespread\b/i, /\bnumerous\b/i, /\bextensive\b/i,
+  /\ba wide range\b/i, /\ba variety of\b/i, /\blarge number\b/i,
+];
+
+function serverSideVagueScan(analysis) {
+  const flagged = [];
+  const textFields = [
+    ...analysis.strategicInsights,
+    ...analysis.recommendations,
+    ...analysis.dimensions.flatMap(d => [d.summary, d.conclusion, ...d.insights]),
+    ...Object.values(analysis.sentimentBreakdown).map(v => v.rationale),
+    ...Object.values(analysis.marketTrendRationale),
+  ].filter(Boolean);
+
+  for (const text of textFields) {
+    for (const pat of VAGUE_PATTERNS) {
+      if (pat.test(text)) {
+        flagged.push({ type: 'VAGUE', excerpt: text.slice(0, 100), pattern: pat.source });
+        break;
+      }
+    }
+  }
+  return flagged;
+}
+
+const AUDIT_SYSTEM = `You are a strict data quality auditor for market research reports.
+Output ONLY valid JSON. No markdown. No extra text.`;
+
+// Build a compact text representation of the analysis to keep audit prompt small
+function buildAuditPayload(analysis) {
+  const lines = [];
+  for (const d of analysis.dimensions) {
+    lines.push(`[${d.id}] ${d.title}`);
+    lines.push(`  summary: ${d.summary}`);
+    d.insights.forEach((ins, i) => lines.push(`  insight${i + 1}: ${ins}`));
+    lines.push(`  conclusion: ${d.conclusion}`);
+  }
+  lines.push(`strategicInsights: ${analysis.strategicInsights.join(' | ')}`);
+  lines.push(`recommendations: ${analysis.recommendations.join(' | ')}`);
+  lines.push(`trendVerdict: ${analysis.marketTrendRationale?.verdict ?? ''}`);
+  return lines.join('\n').slice(0, 6000); // hard cap to avoid token overflow
+}
+
+async function auditDataQuality(analysis, proxy) {
+  // Fast server-side scan first (no API call)
+  const serverFlags = serverSideVagueScan(analysis);
+
+  const auditPrompt = `Audit this market analysis text for data quality.
+
+RULES:
+1. VAGUE_LANGUAGE — "many/various/several/significant/considerable" without a specific number
+2. MISSING_SPECIFICS — claims with no year, %, ¥ figure, or named entity
+3. FABRICATED — numbers that appear invented or implausibly precise
+
+qualityScore: 90-100 all specific | 70-89 mostly specific | 50-69 noticeable gaps | 0-49 pervasive vagueness
+
+TEXT TO AUDIT:
+${buildAuditPayload(analysis)}
+
+Return ONLY valid JSON:
 {
-  "verified": <true | false>,
-  "reason": "<one sentence explaining your decision>"
+  "qualityScore": <0-100>,
+  "passed": <true if qualityScore >= ${QUALITY_THRESHOLD}>,
+  "issueCount": <number>,
+  "issues": [{ "location": "<D1.insights[0] etc>", "type": "VAGUE_LANGUAGE|MISSING_SPECIFICS|FABRICATED", "excerpt": "<max 80 chars>", "suggestion": "<fix>" }],
+  "summary": "<2-3 sentences>"
 }`;
 
-  const text = await callGemini(prompt, VERIFY_SYSTEM, proxyConfig, 256);
-  const data = extractJSON(text);
+  const text = await callGemini(auditPrompt, AUDIT_SYSTEM, proxy, 1024);
+  const audit = extractJSON(text);
 
-  if (typeof data.verified !== 'boolean') {
-    throw new Error('Stage B verification returned unexpected format.');
+  // Merge server-side flags
+  if (serverFlags.length > 0) {
+    const serverIssues = serverFlags.map(f => ({
+      location: 'auto-scan',
+      type: 'VAGUE_LANGUAGE',
+      excerpt: f.excerpt,
+      suggestion: 'Replace with a specific figure, percentage, or year.',
+    }));
+    audit.issues = [...(audit.issues ?? []), ...serverIssues];
+    audit.issueCount = audit.issues.length;
+    if (serverFlags.length > 2) {
+      audit.qualityScore = Math.min(audit.qualityScore ?? 100, 65);
+      audit.passed = audit.qualityScore >= QUALITY_THRESHOLD;
+    }
   }
-  return data; // { verified, reason }
+
+  return audit;
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
@@ -244,18 +346,44 @@ async function analyzeBrand(brandName) {
 
   const proxy = getProxyConfig();
 
-  // ── Stage A: full analysis + embedded brand existence check ─────────────────
-  const rawText = await callGemini(buildPrompt(brandName), SYSTEM_PROMPT, proxy);
-  const parsed  = extractJSON(rawText);
-  const analysis = validate(parsed, brandName); // throws BrandNotFoundError if A fails
+  // ── Stage A: full analysis with embedded brand check ────────────────────────
+  const rawText  = await callGemini(buildPrompt(brandName), SYSTEM_PROMPT, proxy);
+  const parsed   = extractJSON(rawText);
+  let analysis   = validate(parsed, brandName);   // throws BrandNotFoundError if A fails
 
-  // ── Stage B: independent lightweight verification ────────────────────────────
+  // ── Stage B: independent brand verification ──────────────────────────────────
   const verification = await verifyBrandExists(brandName, proxy);
   if (!verification.verified) {
     throw new BrandNotFoundError(brandName,
       `failed independent verification — ${verification.reason}`);
   }
 
+  // ── Stage C: data quality audit (non-blocking — failures degrade gracefully) ──
+  let qualityReport = { qualityScore: null, passed: null, issues: [], summary: 'Audit unavailable.', unavailable: true };
+  try {
+    qualityReport = await auditDataQuality(analysis, proxy);
+
+    // If quality fails, retry the full analysis once with targeted feedback
+    if (!qualityReport.passed) {
+      try {
+        const retryText     = await callGemini(buildPrompt(brandName, qualityReport), SYSTEM_PROMPT, proxy);
+        const retryParsed   = extractJSON(retryText);
+        const retryAnalysis = validate(retryParsed, brandName);
+        const retryQuality  = await auditDataQuality(retryAnalysis, proxy);
+        analysis             = retryAnalysis;
+        qualityReport        = { ...retryQuality, wasRetried: true };
+      } catch (retryErr) {
+        // Retry failed — keep original analysis, mark quality as unverified
+        qualityReport.wasRetried = true;
+        qualityReport.retryFailed = true;
+      }
+    }
+  } catch (auditErr) {
+    qualityReport.unavailable = true;
+    qualityReport.summary = `Quality audit could not run: ${auditErr.message}`;
+  }
+
+  analysis.qualityReport = qualityReport;
   return analysis;
 }
 
