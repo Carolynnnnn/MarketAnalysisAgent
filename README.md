@@ -27,7 +27,7 @@ Enter a brand name, and the agent will:
 | **Data quality audit (Stage C)** | Independent Claude call audits the analysis for vague language, missing specifics, and potentially fabricated figures — score shown in UI with per-issue breakdown |
 | PDF Report | Cover page, Table of Contents, one full page per dimension — generated via PDFKit |
 | Live progress UI | Animated step-by-step status bar while the analysis runs |
-| **User-provided API key** | Each user enters their own Anthropic API key — stored in browser localStorage, never logged server-side |
+| **Simple deployment** | One `ANTHROPIC_API_KEY` in `.env` — configure once, deploy anywhere |
 
 ---
 
@@ -76,11 +76,12 @@ cp .env.example .env
 
 | Variable | Required | Description |
 |---|---|---|
+| `ANTHROPIC_API_KEY` | Yes | Your Anthropic API key — get one at [console.anthropic.com](https://console.anthropic.com) |
 | `HTTPS_PROXY` | If behind a proxy | e.g. `http://127.0.0.1:7897` |
 | `HTTP_PROXY` | If behind a proxy | e.g. `http://127.0.0.1:7897` |
 | `PORT` | No | HTTP port (default: `3000`) |
 
-> **No server-side API key needed.** Each user provides their own Anthropic API key directly in the browser UI.
+> `.env` is gitignored and never committed. When distributing the project, share only `.env.example` — each deployer fills in their own key.
 
 ### 3. Start the server
 
@@ -94,8 +95,7 @@ Open `http://localhost:3000` in your browser.
 
 ## Usage
 
-1. Enter your **Anthropic API key** (`sk-ant-…`) in the key panel at the top and click **Save Key** — the key is stored in your browser and never logged by the server
-2. Enter a brand name in the input field (e.g. *Luckin Coffee*, *Huawei*, *BYD*)
+1. Enter a brand name in the input field (e.g. *Luckin Coffee*, *Huawei*, *BYD*)
 3. Click **Start Analysis**
 4. Wait ~20–60 seconds while Claude runs the 3-stage pipeline and generates the PDF
 5. Review the inline preview — Sentiment Score breakdown, Market Trend rationale, and Data Quality Audit are shown below the summary
@@ -154,7 +154,7 @@ Run a full analysis pipeline for a brand.
 
 **Request body:**
 ```json
-{ "brand": "Luckin Coffee", "apiKey": "sk-ant-…" }
+{ "brand": "Luckin Coffee" }
 ```
 
 **Success response:**
@@ -201,8 +201,7 @@ Run a full analysis pipeline for a brand.
 
 | HTTP | Condition | Body fields |
 |---|---|---|
-| 400 | Missing brand or API key | `{ success: false, error: "…" }` |
-| 401 | Invalid Anthropic API key | `{ success: false, invalidApiKey: true, error: "…" }` |
+| 400 | Missing brand name | `{ success: false, error: "…" }` |
 | 404 | Brand not recognised | `{ success: false, brandNotFound: true, error: "…" }` |
 | 502 | Claude API / network error | `{ success: false, error: "…" }` |
 
@@ -292,8 +291,8 @@ If the audit API call itself fails, the analysis and PDF are still returned. The
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| "Anthropic API key is required" | Key panel not filled in | Enter your `sk-ant-…` key in the panel at the top of the page |
-| "Invalid API key" | Key is wrong or expired | Check your key at [console.anthropic.com](https://console.anthropic.com) — the bad key is cleared automatically |
+| `ANTHROPIC_API_KEY is not set` | `.env` not created or key missing | Copy `.env.example` to `.env` and add your key |
+| `AI analysis failed: 401` | API key is wrong or expired | Check your key at [console.anthropic.com](https://console.anthropic.com) |
 | `429 Rate limit` | Too many requests | The server retries automatically (up to 3×); if it persists, wait 60 s |
 | `TLS connection failed` | Behind a proxy | Set `HTTPS_PROXY` and `HTTP_PROXY` in `.env` |
 | `Model response could not be parsed as JSON` | Transient model output issue | Retry the request |

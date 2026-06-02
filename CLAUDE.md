@@ -33,7 +33,7 @@ This rule exists so that `README.md` always reflects the actual state of the pro
 
 - **axios over fetch / SDK**: Node.js native fetch (undici) is blocked in the sandbox; axios uses Node's `http` module which respects the proxy config and works correctly.
 - **dotenv override:true**: The shell environment pre-sets env vars to empty strings; without `override:true` dotenv silently skips them.
-- **User-provided API key**: The Anthropic API key is entered by the user in the browser UI, stored in localStorage, and sent as `apiKey` in the request body. The server never stores it. This enables public use without a shared server-side key.
+- **Server-side API key**: `ANTHROPIC_API_KEY` lives in `.env` (gitignored). Each deployer configures their own. The `.env.example` ships without a key so users know what to fill in.
 - **Two Claude models**: `claude-sonnet-4-6` for Stage A (complex analysis, 8192 tokens), `claude-haiku-4-5-20251001` for Stage B + C (lightweight checks, cheaper). Haiku handles brand verification and quality audit.
 - **429/529 auto-retry in callClaude**: Anthropic rate-limit and overload errors are retried up to 3×, waiting on the `retry-after` header before each attempt.
 - **InvalidApiKeyError**: 401/403 from Anthropic is surfaced as a distinct error class so the server returns HTTP 401 and the UI clears the bad key from localStorage automatically.

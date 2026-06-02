@@ -7,7 +7,7 @@ const cors    = require('cors');
 const path    = require('path');
 const fs      = require('fs');
 
-const { analyzeBrand, BrandNotFoundError, InvalidApiKeyError } = require('./analyzer');
+const { analyzeBrand, BrandNotFoundError } = require('./analyzer');
 const { generatePDF }  = require('./pdfGenerator');
 
 const app  = express();
@@ -39,16 +39,11 @@ app.get('/', (req, res) => {
 
 // POST /analyze — full analysis pipeline
 app.post('/analyze', async (req, res) => {
-  const { brand, apiKey } = req.body;
+  const { brand } = req.body;
 
   if (!brand || typeof brand !== 'string' || !brand.trim()) {
     log('warn', 'VALIDATE', 'Missing or empty brand name in request body');
     return res.status(400).json({ success: false, error: 'brand name is required.' });
-  }
-
-  if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
-    log('warn', 'VALIDATE', 'Missing Anthropic API key in request body');
-    return res.status(400).json({ success: false, error: 'Anthropic API key is required.', missingApiKey: true });
   }
 
   const brandName = brand.trim();
@@ -58,17 +53,13 @@ app.post('/analyze', async (req, res) => {
   let analysis;
   try {
     log('info', 'ANALYZE', `Analysing "${brandName}" via Anthropic Claude…`);
-    analysis = await analyzeBrand(brandName, apiKey);
+    analysis = await analyzeBrand(brandName);
     log('info', 'ANALYZE', `Analysis complete. Sentiment: ${analysis.sentimentScore}, Trend: ${analysis.marketTrend}, Dimensions: ${analysis.dimensions.length}`);
   } catch (err) {
     const detail = err.response?.data?.error?.message ?? err.message ?? String(err);
     if (err instanceof BrandNotFoundError) {
       log('warn', 'ANALYZE', `Brand not found: "${brandName}".`, err.reason);
       return res.status(404).json({ success: false, brandNotFound: true, error: detail });
-    }
-    if (err instanceof InvalidApiKeyError) {
-      log('warn', 'ANALYZE', 'Invalid Anthropic API key provided.');
-      return res.status(401).json({ success: false, invalidApiKey: true, error: detail });
     }
     log('error', 'ANALYZE', 'Analysis failed.', detail);
     return res.status(502).json({ success: false, error: `AI analysis failed: ${detail}` });

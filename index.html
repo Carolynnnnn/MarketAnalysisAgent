@@ -397,87 +397,6 @@
       font-style: normal;
     }
 
-    /* ── API Key Panel ── */
-    .api-key-panel {
-      width: 100%;
-      max-width: 680px;
-      margin-bottom: 16px;
-      background: #1e2130;
-      border: 1px solid #2d3148;
-      border-radius: 16px;
-      padding: 20px 28px;
-    }
-
-    .api-key-panel label {
-      display: block;
-      font-size: 0.78rem;
-      font-weight: 600;
-      color: #94a3b8;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-bottom: 10px;
-    }
-
-    .api-key-row {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-    }
-
-    .api-key-row input[type="password"],
-    .api-key-row input[type="text"] {
-      flex: 1;
-      font-family: monospace;
-      font-size: 0.85rem;
-    }
-
-    #saveKeyBtn {
-      background: linear-gradient(135deg, #6ee7f7, #a78bfa);
-      color: #0f1117;
-      padding: 12px 18px;
-      white-space: nowrap;
-    }
-
-    #toggleKeyBtn {
-      background: transparent;
-      border: 1px solid #2d3148;
-      color: #94a3b8;
-      padding: 12px 14px;
-      font-size: 0.85rem;
-    }
-
-    .api-key-hint {
-      margin-top: 8px;
-      font-size: 0.75rem;
-      color: #4a5568;
-    }
-
-    #apiKeyStatus {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .key-ok-badge {
-      background: #052e16;
-      border: 1px solid #166534;
-      color: #4ade80;
-      border-radius: 8px;
-      padding: 6px 12px;
-      font-size: 0.82rem;
-      font-weight: 600;
-    }
-
-    #changeKeyLink {
-      font-size: 0.8rem;
-      color: #6ee7f7;
-      cursor: pointer;
-      background: none;
-      border: none;
-      padding: 0;
-      text-decoration: underline;
-      font-weight: 400;
-    }
   </style>
 </head>
 <body>
@@ -486,25 +405,6 @@
     <h1>Brand Market Analysis Agent</h1>
     <p>AI-powered brand intelligence &amp; PDF reporting</p>
   </header>
-
-  <!-- API Key Configuration -->
-  <div class="api-key-panel" id="apiKeyPanel">
-    <!-- Form (shown when no key is saved) -->
-    <div id="apiKeyForm">
-      <label>Anthropic API Key</label>
-      <div class="api-key-row">
-        <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-…" autocomplete="off" />
-        <button id="toggleKeyBtn" onclick="toggleKeyVisibility()" title="Show / hide key">&#128065;</button>
-        <button id="saveKeyBtn" onclick="saveApiKey()">Save Key</button>
-      </div>
-      <p class="api-key-hint">Stored in your browser only. Never logged by this server.</p>
-    </div>
-    <!-- Status (shown when key is saved) -->
-    <div id="apiKeyStatus" style="display:none">
-      <span class="key-ok-badge">&#10003; API Key configured</span>
-      <button id="changeKeyLink" onclick="changeApiKey()">Change</button>
-    </div>
-  </div>
 
   <div class="card">
 
@@ -570,57 +470,7 @@
     let currentStep = 0;
     let downloadUrl = "";
 
-    // ── API Key management ──────────────────────────────────────────────────
-    function initApiKey() {
-      const saved = localStorage.getItem("anthropicApiKey");
-      if (saved) {
-        showKeyStatus();
-      } else {
-        showKeyForm();
-      }
-    }
-
-    function showKeyForm() {
-      document.getElementById("apiKeyForm").style.display = "block";
-      document.getElementById("apiKeyStatus").style.display = "none";
-      document.getElementById("startBtn").disabled = true;
-    }
-
-    function showKeyStatus() {
-      document.getElementById("apiKeyForm").style.display = "none";
-      document.getElementById("apiKeyStatus").style.display = "flex";
-      document.getElementById("startBtn").disabled = false;
-    }
-
-    function saveApiKey() {
-      const key = document.getElementById("apiKeyInput").value.trim();
-      if (!key.startsWith("sk-ant-")) {
-        document.getElementById("apiKeyInput").style.borderColor = "#ef4444";
-        document.getElementById("apiKeyInput").placeholder = "Must start with sk-ant-…";
-        return;
-      }
-      localStorage.setItem("anthropicApiKey", key);
-      document.getElementById("apiKeyInput").value = "";
-      document.getElementById("apiKeyInput").style.borderColor = "";
-      showKeyStatus();
-    }
-
-    function changeApiKey() {
-      showKeyForm();
-      document.getElementById("apiKeyInput").focus();
-    }
-
-    function toggleKeyVisibility() {
-      const inp = document.getElementById("apiKeyInput");
-      inp.type = inp.type === "password" ? "text" : "password";
-    }
-
-    // Allow Enter key in the API key input to trigger save
     document.addEventListener("DOMContentLoaded", () => {
-      initApiKey();
-      document.getElementById("apiKeyInput").addEventListener("keydown", e => {
-        if (e.key === "Enter") saveApiKey();
-      });
       document.getElementById("brandInput").addEventListener("keydown", e => {
         if (e.key === "Enter") startAnalysis();
       });
@@ -636,7 +486,7 @@
       clearInterval(stepTimer);
       currentStep = 0;
       downloadUrl = "";
-      document.getElementById("startBtn").disabled = !localStorage.getItem("anthropicApiKey");
+      document.getElementById("startBtn").disabled = false;
       document.getElementById("statusArea").classList.remove("active");
       document.getElementById("progressFill").style.width = "0%";
       document.getElementById("scoreBreakdown").classList.remove("visible");
@@ -645,16 +495,8 @@
     }
 
     async function startAnalysis() {
-      const brand  = document.getElementById("brandInput").value.trim();
-      const apiKey = localStorage.getItem("anthropicApiKey");
-
+      const brand = document.getElementById("brandInput").value.trim();
       if (!brand) { document.getElementById("brandInput").focus(); return; }
-
-      if (!apiKey) {
-        showKeyForm();
-        document.getElementById("apiKeyInput").focus();
-        return;
-      }
 
       // Reset
       document.getElementById("startBtn").disabled = true;
@@ -677,7 +519,7 @@
         const res  = await fetch("/analyze", {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ brand, apiKey }),
+          body:    JSON.stringify({ brand }),
         });
         const data = await res.json();
 
@@ -685,8 +527,7 @@
 
         if (!res.ok || !data.success) {
           const err = new Error(data.error || "Unknown server error.");
-          if (data.brandNotFound)  { err.brandNotFound = true; err.brandName = brand; }
-          if (data.invalidApiKey)  { err.invalidApiKey = true; }
+          if (data.brandNotFound) { err.brandNotFound = true; err.brandName = brand; }
           throw err;
         }
 
@@ -802,13 +643,6 @@
         if (err.brandNotFound) {
           document.getElementById("statusText").textContent =
             `⚠️ Brand not recognised: "${err.brandName}". Please check the spelling or try a different brand.`;
-        } else if (err.invalidApiKey) {
-          document.getElementById("statusText").textContent =
-            "⚠️ Invalid API key. Please check your Anthropic API key and try again.";
-          // Clear the bad key so user is prompted to re-enter
-          localStorage.removeItem("anthropicApiKey");
-          setTimeout(() => { resetUI(); changeApiKey(); }, 3000);
-          return;
         } else {
           document.getElementById("statusText").textContent = "Error: " + err.message;
         }

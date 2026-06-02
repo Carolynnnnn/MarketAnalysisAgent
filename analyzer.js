@@ -352,9 +352,10 @@ Return ONLY valid JSON:
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
-async function analyzeBrand(brandName, apiKey) {
-  if (!apiKey || !apiKey.trim()) {
-    throw new Error('Anthropic API key is required.');
+async function analyzeBrand(brandName) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error('ANTHROPIC_API_KEY is not set. Create a .env file based on .env.example.');
   }
 
   const proxy = getProxyConfig();
