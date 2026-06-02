@@ -3,11 +3,13 @@
 require('dotenv').config({ override: true });
 const axios = require('axios');
 
-const MODEL      = 'gemini-flash-latest';
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+const MODEL_MAIN = 'claude-sonnet-4-6';           // Stage A — full analysis
+const MODEL_FAST = 'claude-haiku-4-5-20251001';   // Stage B + C — quick checks
+const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+const ANTHROPIC_VERSION = '2023-06-01';
 
 const CONFIDENCE_THRESHOLD = 70;
-const QUALITY_THRESHOLD    = 70;  // Stage C minimum score to pass without warning
+const QUALITY_THRESHOLD    = 70;
 
 // ─── Custom errors ────────────────────────────────────────────────────────────
 class BrandNotFoundError extends Error {
@@ -19,7 +21,14 @@ class BrandNotFoundError extends Error {
   }
 }
 
-// ─── Proxy + Gemini helpers ───────────────────────────────────────────────────
+class InvalidApiKeyError extends Error {
+  constructor(message) {
+    super(message || 'Invalid Anthropic API key.');
+    this.name = 'InvalidApiKeyError';
+  }
+}
+
+// ─── Proxy helper ─────────────────────────────────────────────────────────────
 function getProxyConfig() {
   const url = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
   if (!url) return false;
@@ -27,36 +36,44 @@ function getProxyConfig() {
   return { host: u.hostname, port: Number(u.port), protocol: u.protocol };
 }
 
-async function callGemini(userPrompt, systemPrompt, proxy, maxTokens = 4096) {
+// ─── Anthropic API helper ─────────────────────────────────────────────────────
+async function callClaude(userPrompt, systemPrompt, apiKey, proxy, { maxTokens = 8192, model = MODEL_MAIN } = {}) {
   const MAX_RETRIES = 3;
   let lastErr;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       const res = await axios.post(
-        `${GEMINI_URL}?key=${process.env.GOOGLE_API_KEY}`,
+        ANTHROPIC_URL,
         {
-          system_instruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-          generationConfig: { temperature: 0.2, maxOutputTokens: maxTokens, thinkingConfig: { thinkingBudget: 0 } },
+          model,
+          max_tokens: maxTokens,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userPrompt }],
         },
-        { headers: { 'Content-Type': 'application/json' }, timeout: 120_000, proxy },
+        {
+          headers: {
+            'x-api-key':         apiKey,
+            'anthropic-version': ANTHROPIC_VERSION,
+            'Content-Type':      'application/json',
+          },
+          timeout: 120_000,
+          proxy,
+        },
       );
-      const cand   = res.data?.candidates?.[0];
-      const reason = cand?.finishReason;
-      const parts  = cand?.content?.parts ?? [];
-      const text   = parts.map(p => p.text ?? '').join('');
-      if (reason && reason !== 'STOP') console.warn(`[GEMINI] finishReason=${reason} len=${text.length} parts=${parts.length}`);
-      if (!text.trim()) throw new Error('Gemini returned no text output.');
+      const text = res.data?.content?.[0]?.text;
+      if (!text?.trim()) throw new Error('Claude returned no text output.');
       return text;
     } catch (err) {
       lastErr = err;
       const status  = err.response?.status;
-      const message = err.response?.data?.error?.message ?? '';
-      if (status === 429) {
-        const match   = message.match(/retry in (\d+(\.\d+)?)s/i);
-        const waitMs  = match ? Math.ceil(parseFloat(match[1]) * 1000) + 500 : 15000;
+      const errMsg  = err.response?.data?.error?.message ?? err.message ?? String(err);
+
+      if (status === 401 || status === 403) throw new InvalidApiKeyError(errMsg);
+
+      if (status === 429 || status === 529) {
+        const retryAfter = parseInt(err.response?.headers?.['retry-after'] ?? '15', 10);
         if (attempt < MAX_RETRIES) {
-          await new Promise(r => setTimeout(r, waitMs));
+          await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
           continue;
         }
       }
@@ -225,7 +242,7 @@ function validate(data, brandName) {
 const VERIFY_SYSTEM = `You are a factual brand verification assistant.
 Answer ONLY with a valid JSON object — no markdown, no extra text.`;
 
-async function verifyBrandExists(brandName, proxy) {
+async function verifyBrandExists(brandName, apiKey, proxy) {
   const prompt = `Is "${brandName}" a real, verifiable brand, company, or product that genuinely
 exists in China's consumer market or is internationally known?
 
@@ -236,17 +253,16 @@ Criteria for "verified: true":
 
 Return ONLY: { "verified": <true|false>, "reason": "<one sentence>" }`;
 
-  const text = await callGemini(prompt, VERIFY_SYSTEM, proxy, 256);
+  const text = await callClaude(prompt, VERIFY_SYSTEM, apiKey, proxy, { maxTokens: 256, model: MODEL_FAST });
   const data = extractJSON(text);
   if (typeof data.verified !== 'boolean') throw new Error('Stage B: unexpected format.');
   return data;
 }
 
 // ─── Stage C — data quality audit ────────────────────────────────────────────
-// Server-side pre-scan for obviously vague patterns
 const VAGUE_PATTERNS = [
   /\bmany\b/i, /\bvarious\b/i, /\bseveral\b/i, /\ba number of\b/i,
-  /\bsome\b(?! stores| stores| outlets)/i,
+  /\bsome\b(?! stores| outlets)/i,
   /\bsignificant(ly)?\b(?! \d)/i, /\bconsiderable\b/i, /\bsubstantial\b/i,
   /\bwidespread\b/i, /\bnumerous\b/i, /\bextensive\b/i,
   /\ba wide range\b/i, /\ba variety of\b/i, /\blarge number\b/i,
@@ -276,7 +292,6 @@ function serverSideVagueScan(analysis) {
 const AUDIT_SYSTEM = `You are a strict data quality auditor for market research reports.
 Output ONLY valid JSON. No markdown. No extra text.`;
 
-// Build a compact text representation of the analysis to keep audit prompt small
 function buildAuditPayload(analysis) {
   const lines = [];
   for (const d of analysis.dimensions) {
@@ -288,11 +303,10 @@ function buildAuditPayload(analysis) {
   lines.push(`strategicInsights: ${analysis.strategicInsights.join(' | ')}`);
   lines.push(`recommendations: ${analysis.recommendations.join(' | ')}`);
   lines.push(`trendVerdict: ${analysis.marketTrendRationale?.verdict ?? ''}`);
-  return lines.join('\n').slice(0, 6000); // hard cap to avoid token overflow
+  return lines.join('\n').slice(0, 6000);
 }
 
-async function auditDataQuality(analysis, proxy) {
-  // Fast server-side scan first (no API call)
+async function auditDataQuality(analysis, apiKey, proxy) {
   const serverFlags = serverSideVagueScan(analysis);
 
   const auditPrompt = `Audit this market analysis text for data quality.
@@ -316,10 +330,9 @@ Return ONLY valid JSON:
   "summary": "<2-3 sentences>"
 }`;
 
-  const text = await callGemini(auditPrompt, AUDIT_SYSTEM, proxy, 1024);
+  const text  = await callClaude(auditPrompt, AUDIT_SYSTEM, apiKey, proxy, { maxTokens: 2048, model: MODEL_FAST });
   const audit = extractJSON(text);
 
-  // Merge server-side flags
   if (serverFlags.length > 0) {
     const serverIssues = serverFlags.map(f => ({
       location: 'auto-scan',
@@ -339,42 +352,40 @@ Return ONLY valid JSON:
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
-async function analyzeBrand(brandName) {
-  if (!process.env.GOOGLE_API_KEY) {
-    throw new Error('GOOGLE_API_KEY is not set in environment variables.');
+async function analyzeBrand(brandName, apiKey) {
+  if (!apiKey || !apiKey.trim()) {
+    throw new Error('Anthropic API key is required.');
   }
 
   const proxy = getProxyConfig();
 
   // ── Stage A: full analysis with embedded brand check ────────────────────────
-  const rawText  = await callGemini(buildPrompt(brandName), SYSTEM_PROMPT, proxy);
+  const rawText  = await callClaude(buildPrompt(brandName), SYSTEM_PROMPT, apiKey, proxy);
   const parsed   = extractJSON(rawText);
-  let analysis   = validate(parsed, brandName);   // throws BrandNotFoundError if A fails
+  let analysis   = validate(parsed, brandName);
 
   // ── Stage B: independent brand verification ──────────────────────────────────
-  const verification = await verifyBrandExists(brandName, proxy);
+  const verification = await verifyBrandExists(brandName, apiKey, proxy);
   if (!verification.verified) {
     throw new BrandNotFoundError(brandName,
       `failed independent verification — ${verification.reason}`);
   }
 
-  // ── Stage C: data quality audit (non-blocking — failures degrade gracefully) ──
+  // ── Stage C: data quality audit (non-blocking) ────────────────────────────
   let qualityReport = { qualityScore: null, passed: null, issues: [], summary: 'Audit unavailable.', unavailable: true };
   try {
-    qualityReport = await auditDataQuality(analysis, proxy);
+    qualityReport = await auditDataQuality(analysis, apiKey, proxy);
 
-    // If quality fails, retry the full analysis once with targeted feedback
     if (!qualityReport.passed) {
       try {
-        const retryText     = await callGemini(buildPrompt(brandName, qualityReport), SYSTEM_PROMPT, proxy);
+        const retryText     = await callClaude(buildPrompt(brandName, qualityReport), SYSTEM_PROMPT, apiKey, proxy);
         const retryParsed   = extractJSON(retryText);
         const retryAnalysis = validate(retryParsed, brandName);
-        const retryQuality  = await auditDataQuality(retryAnalysis, proxy);
-        analysis             = retryAnalysis;
-        qualityReport        = { ...retryQuality, wasRetried: true };
-      } catch (retryErr) {
-        // Retry failed — keep original analysis, mark quality as unverified
-        qualityReport.wasRetried = true;
+        const retryQuality  = await auditDataQuality(retryAnalysis, apiKey, proxy);
+        analysis      = retryAnalysis;
+        qualityReport = { ...retryQuality, wasRetried: true };
+      } catch (_) {
+        qualityReport.wasRetried  = true;
         qualityReport.retryFailed = true;
       }
     }
@@ -387,4 +398,4 @@ async function analyzeBrand(brandName) {
   return analysis;
 }
 
-module.exports = { analyzeBrand, BrandNotFoundError };
+module.exports = { analyzeBrand, BrandNotFoundError, InvalidApiKeyError };

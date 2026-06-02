@@ -32,7 +32,8 @@ This rule exists so that `README.md` always reflects the actual state of the pro
 ## Key Design Decisions
 
 - **axios over fetch / SDK**: Node.js native fetch (undici) is blocked in the sandbox; axios uses Node's `http` module which respects the proxy config and works correctly.
-- **dotenv override:true**: The shell environment pre-sets `ANTHROPIC_API_KEY` and other vars to empty strings; without `override:true` dotenv silently skips them.
-- **gemini-flash-latest model**: `gemini-2.5-flash-lite` and `gemini-2.0-flash` have exhausted their free-tier quota on this key. `gemini-flash-latest` (resolves to gemini-3.5-flash / gemini-2.5-flash) has remaining quota.
-- **thinkingBudget: 0 is mandatory**: `gemini-flash-latest` uses built-in extended thinking by default. Thinking tokens count against `maxOutputTokens`, so with the default 4 096 limit the model spent ~3 900 tokens thinking and only ~141 on visible output — causing `MAX_TOKENS` and truncated JSON. Setting `thinkingConfig: { thinkingBudget: 0 }` disables this and reserves all output tokens for the actual response.
-- **429 auto-retry in callGemini**: Free-tier rate limit is 20 req/min. `callGemini` retries up to 3 times, waiting the exact `retry in Xs` duration from the error message before each attempt.
+- **dotenv override:true**: The shell environment pre-sets env vars to empty strings; without `override:true` dotenv silently skips them.
+- **User-provided API key**: The Anthropic API key is entered by the user in the browser UI, stored in localStorage, and sent as `apiKey` in the request body. The server never stores it. This enables public use without a shared server-side key.
+- **Two Claude models**: `claude-sonnet-4-6` for Stage A (complex analysis, 8192 tokens), `claude-haiku-4-5-20251001` for Stage B + C (lightweight checks, cheaper). Haiku handles brand verification and quality audit.
+- **429/529 auto-retry in callClaude**: Anthropic rate-limit and overload errors are retried up to 3×, waiting on the `retry-after` header before each attempt.
+- **InvalidApiKeyError**: 401/403 from Anthropic is surfaced as a distinct error class so the server returns HTTP 401 and the UI clears the bad key from localStorage automatically.

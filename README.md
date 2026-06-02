@@ -8,7 +8,7 @@ An AI-powered web application that generates structured China market analysis re
 
 Enter a brand name, and the agent will:
 
-1. Call the **Google Gemini API** to produce a detailed 5-dimension market analysis in structured JSON
+1. Call the **Anthropic Claude API** to produce a detailed 5-dimension market analysis in structured JSON
 2. Validate the brand through a two-stage existence check before generating any report
 3. Audit the analysis for vague language and missing specifics (Stage C quality check)
 4. Render an **inline preview** with scored metrics, quality badge, and issue list in the browser
@@ -24,16 +24,17 @@ Enter a brand name, and the agent will:
 | Sentiment Score | Weighted composite score (0–100) across 5 sub-dimensions with progress-bar breakdown |
 | Market Trend | `growing / stable / declining` verdict backed by 4 explicit indicators with per-indicator rationale |
 | **Two-stage brand validation** | Stage A (embedded in analysis) + Stage B (independent lightweight check) — rejects fictional or misspelled brands before generating a report |
-| **Data quality audit (Stage C)** | Independent Gemini call audits the analysis for vague language, missing specifics, and potentially fabricated figures — score shown in UI with per-issue breakdown |
+| **Data quality audit (Stage C)** | Independent Claude call audits the analysis for vague language, missing specifics, and potentially fabricated figures — score shown in UI with per-issue breakdown |
 | PDF Report | Cover page, Table of Contents, one full page per dimension — generated via PDFKit |
 | Live progress UI | Animated step-by-step status bar while the analysis runs |
+| **User-provided API key** | Each user enters their own Anthropic API key — stored in browser localStorage, never logged server-side |
 
 ---
 
 ## Tech Stack
 
 - **Runtime**: Node.js + Express 5
-- **AI Model**: Google Gemini `gemini-flash-latest` via REST API (axios)
+- **AI Model**: Anthropic Claude (`claude-sonnet-4-6` for analysis, `claude-haiku-4-5-20251001` for verification/audit) via REST API (axios)
 - **PDF**: PDFKit
 - **Frontend**: Vanilla HTML/CSS/JS (single `index.html`)
 
@@ -44,11 +45,11 @@ Enter a brand name, and the agent will:
 ```
 MarketAnalysisAgent/
 ├── server.js          # Express server — routes, pipeline orchestration
-├── analyzer.js        # Gemini API call, prompt, JSON validation
+├── analyzer.js        # Anthropic API calls, prompt, JSON validation
 ├── pdfGenerator.js    # PDFKit report rendering (cover, TOC, 5 dimension pages)
-├── index.html         # Single-page frontend UI
-├── .env               # Local secrets (gitignored)
-├── .env.example       # Template for required environment variables
+├── index.html         # Single-page frontend UI (includes API key panel)
+├── .env               # Local config (gitignored) — proxy settings only
+├── .env.example       # Template for environment variables
 ├── Reports/           # Generated PDFs (gitignored)
 └── package.json
 ```
@@ -65,9 +66,9 @@ cd MarketAnalysisAgent
 npm install
 ```
 
-### 2. Configure environment variables
+### 2. Configure environment variables (optional)
 
-Copy `.env.example` to `.env` and fill in your values:
+Only needed if running behind a proxy. Copy `.env.example` to `.env`:
 
 ```bash
 cp .env.example .env
@@ -75,12 +76,11 @@ cp .env.example .env
 
 | Variable | Required | Description |
 |---|---|---|
-| `GOOGLE_API_KEY` | Yes | Google AI Studio API key — get one at [aistudio.google.com](https://aistudio.google.com) |
 | `HTTPS_PROXY` | If behind a proxy | e.g. `http://127.0.0.1:7897` |
 | `HTTP_PROXY` | If behind a proxy | e.g. `http://127.0.0.1:7897` |
 | `PORT` | No | HTTP port (default: `3000`) |
 
-> **Note:** The server uses `dotenv` with `override: true`, so values in `.env` always take precedence over the shell environment.
+> **No server-side API key needed.** Each user provides their own Anthropic API key directly in the browser UI.
 
 ### 3. Start the server
 
@@ -94,11 +94,12 @@ Open `http://localhost:3000` in your browser.
 
 ## Usage
 
-1. Enter a brand name in the input field (e.g. *Luckin Coffee*, *Huawei*, *BYD*)
-2. Click **Start Analysis**
-3. Wait ~10–30 seconds while the AI runs the analysis and generates the PDF
-4. Review the inline preview — Sentiment Score breakdown and Market Trend rationale are shown below the summary
-5. Click **Download PDF Report** to save the full 7-page report
+1. Enter your **Anthropic API key** (`sk-ant-…`) in the key panel at the top and click **Save Key** — the key is stored in your browser and never logged by the server
+2. Enter a brand name in the input field (e.g. *Luckin Coffee*, *Huawei*, *BYD*)
+3. Click **Start Analysis**
+4. Wait ~20–60 seconds while Claude runs the 3-stage pipeline and generates the PDF
+5. Review the inline preview — Sentiment Score breakdown, Market Trend rationale, and Data Quality Audit are shown below the summary
+6. Click **Download PDF Report** to save the full 7-page report
 
 ---
 
@@ -153,7 +154,7 @@ Run a full analysis pipeline for a brand.
 
 **Request body:**
 ```json
-{ "brand": "Luckin Coffee" }
+{ "brand": "Luckin Coffee", "apiKey": "sk-ant-…" }
 ```
 
 **Success response:**
@@ -161,8 +162,8 @@ Run a full analysis pipeline for a brand.
 {
   "success": true,
   "brand": "Luckin Coffee",
-  "downloadUrl": "/download/20260525 Luckin Coffee Analysis.pdf",
-  "filename": "20260525 Luckin Coffee Analysis.pdf",
+  "downloadUrl": "/download/20260526 Luckin Coffee Analysis.pdf",
+  "filename": "20260526 Luckin Coffee Analysis.pdf",
   "preview": {
     "sentimentScore": 78,
     "sentimentBreakdown": {
@@ -180,6 +181,13 @@ Run a full analysis pipeline for a brand.
       "demandSignals":    "...",
       "verdict":          "..."
     },
+    "qualityReport": {
+      "qualityScore": 92,
+      "passed": true,
+      "issueCount": 1,
+      "issues": [...],
+      "summary": "..."
+    },
     "strategicInsights": ["...", "...", "..."],
     "recommendations":   ["...", "...", "..."],
     "dimensions": [...],
@@ -188,6 +196,15 @@ Run a full analysis pipeline for a brand.
   }
 }
 ```
+
+**Error responses:**
+
+| HTTP | Condition | Body fields |
+|---|---|---|
+| 400 | Missing brand or API key | `{ success: false, error: "…" }` |
+| 401 | Invalid Anthropic API key | `{ success: false, invalidApiKey: true, error: "…" }` |
+| 404 | Brand not recognised | `{ success: false, brandNotFound: true, error: "…" }` |
+| 502 | Claude API / network error | `{ success: false, error: "…" }` |
 
 ### `GET /download/:filename`
 
@@ -215,7 +232,7 @@ Every analysis request passes through a two-stage validation pipeline before a P
 
 ### Stage A — Embedded existence check (inside main analysis call)
 
-The Gemini model is asked to self-assess two fields alongside the full analysis:
+Claude is asked to self-assess two fields alongside the full analysis:
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -223,11 +240,11 @@ The Gemini model is asked to self-assess two fields alongside the full analysis:
 | `brandConfidence` | 0–100 | Certainty level: 100 = globally known, 70 = regionally known, <50 = unknown/fictional |
 | `brandConfidenceRationale` | string | One-sentence explanation |
 
-**Gate:** if `brandExists === false` OR `brandConfidence < 70` → request is rejected immediately with HTTP 404. Stage B is skipped (no extra API call).
+**Gate:** if `brandExists === false` OR `brandConfidence < 70` → request is rejected immediately with HTTP 404. Stage B is skipped.
 
 ### Stage B — Independent lightweight verification (only runs if A passes)
 
-A separate, minimal Gemini call asks a single yes/no question:
+A separate, minimal Claude Haiku call asks a single yes/no question:
 
 > *"Is this brand a real, verifiable company with documented revenue, retail presence, or media coverage?"*
 
@@ -241,7 +258,7 @@ The status bar shows a clear message: `⚠️ Brand not recognised: "...". Pleas
 
 ## Data Quality Audit (Stage C)
 
-After brand validation passes, a third Gemini call audits the generated analysis for data quality.
+After brand validation passes, a third Claude Haiku call audits the generated analysis for data quality.
 
 ### What is checked
 
@@ -267,7 +284,7 @@ If the first analysis scores below 70, the pipeline automatically retries Stage 
 
 ### Graceful degradation
 
-If the audit API call itself fails (e.g. quota exhausted), the analysis and PDF are still returned. The quality section in the UI shows a blue `?` badge and an "Audit unavailable" message — the report is not blocked.
+If the audit API call itself fails, the analysis and PDF are still returned. The quality section in the UI shows a blue `?` badge and an "Audit unavailable" message — the report is not blocked.
 
 ---
 
@@ -275,7 +292,8 @@ If the audit API call itself fails (e.g. quota exhausted), the analysis and PDF 
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `GOOGLE_API_KEY is not set` | `.env` not created or not loaded | Create `.env` from `.env.example` |
-| `429 Quota exceeded` | Free-tier rate limit hit | The server retries automatically (up to 3×); if it persists, wait 60 s or upgrade API plan |
+| "Anthropic API key is required" | Key panel not filled in | Enter your `sk-ant-…` key in the panel at the top of the page |
+| "Invalid API key" | Key is wrong or expired | Check your key at [console.anthropic.com](https://console.anthropic.com) — the bad key is cleared automatically |
+| `429 Rate limit` | Too many requests | The server retries automatically (up to 3×); if it persists, wait 60 s |
 | `TLS connection failed` | Behind a proxy | Set `HTTPS_PROXY` and `HTTP_PROXY` in `.env` |
-| `Model response could not be parsed as JSON` | Transient model output issue | Retry the request; the prompt instructs plain JSON output |
+| `Model response could not be parsed as JSON` | Transient model output issue | Retry the request |
