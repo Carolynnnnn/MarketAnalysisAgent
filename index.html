@@ -56,10 +56,17 @@
       display: flex;
       gap: 12px;
       margin-bottom: 24px;
+      align-items: flex-start;
+    }
+
+    .search-wrapper {
+      flex: 1;
+      position: relative;
     }
 
     input[type="text"] {
-      flex: 1;
+      width: 100%;
+      box-sizing: border-box;
       background: #0f1117;
       border: 1px solid #2d3148;
       border-radius: 10px;
@@ -76,6 +83,38 @@
 
     input[type="text"]::placeholder {
       color: #4a5568;
+    }
+
+    #suggestDropdown {
+      display: none;
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      right: 0;
+      background: #1a1d2e;
+      border: 1px solid #2d3148;
+      border-radius: 10px;
+      z-index: 200;
+      overflow: hidden;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+
+    .suggest-item {
+      padding: 10px 16px;
+      color: #cbd5e1;
+      cursor: pointer;
+      font-size: 0.9rem;
+      border-bottom: 1px solid #2d3148;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .suggest-item:last-child {
+      border-bottom: none;
+    }
+
+    .suggest-item:hover {
+      background: #2d3148;
+      color: #6ee7f7;
     }
 
     button {
@@ -301,14 +340,15 @@
       font-style: italic;
     }
 
-    #qualityReport {
+
+    #referencesSection {
       display: none;
       margin-bottom: 20px;
     }
 
-    #qualityReport.visible { display: block; }
+    #referencesSection.visible { display: block; }
 
-    #qualityReport h3 {
+    #referencesSection h3 {
       font-size: 0.78rem;
       font-weight: 600;
       color: #94a3b8;
@@ -317,61 +357,92 @@
       margin-bottom: 10px;
     }
 
-    .quality-header {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 12px 16px;
-      border-radius: 10px;
-      margin-bottom: 10px;
-    }
-
-    .quality-header.pass  { background: #052e16; border: 1px solid #166534; }
-    .quality-header.warn  { background: #1c1a05; border: 1px solid #854d0e; }
-    .quality-header.retry { background: #0f172a; border: 1px solid #1e40af; }
-
-    .quality-badge {
-      font-size: 1.3rem;
-      font-weight: 700;
-      min-width: 44px;
-      text-align: center;
-    }
-
-    .quality-badge.pass  { color: #4ade80; }
-    .quality-badge.warn  { color: #facc15; }
-
-    .quality-meta { flex: 1; }
-    .quality-meta .q-score { font-size: 0.9rem; font-weight: 600; color: #e2e8f0; }
-    .quality-meta .q-summary { font-size: 0.8rem; color: #94a3b8; margin-top: 2px; line-height: 1.4; }
-
-    .quality-issue {
-      display: flex;
-      gap: 8px;
-      padding: 7px 12px;
-      margin-bottom: 5px;
+    .ref-item {
+      display: grid;
+      grid-template-columns: 36px 40px 1fr auto;
+      gap: 0 10px;
+      align-items: start;
+      padding: 10px 12px;
+      margin-bottom: 6px;
       background: #0f1117;
       border: 1px solid #2d3148;
-      border-radius: 7px;
-      font-size: 0.78rem;
+      border-radius: 8px;
+      font-size: 0.8rem;
     }
 
-    .issue-type {
-      flex-shrink: 0;
-      padding: 1px 6px;
-      border-radius: 4px;
+    .ref-id {
+      color: #4a5568;
       font-weight: 700;
-      font-size: 0.7rem;
-      align-self: flex-start;
-      margin-top: 1px;
+      font-size: 0.75rem;
+      padding-top: 2px;
     }
 
-    .issue-type.VAGUE_LANGUAGE    { background: #422006; color: #fb923c; }
-    .issue-type.MISSING_SPECIFICS { background: #1e1b4b; color: #a5b4fc; }
-    .issue-type.FABRICATED        { background: #3b0764; color: #e879f9; }
+    .ref-dim {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.68rem;
+      font-weight: 700;
+      text-align: center;
+      align-self: start;
+    }
 
-    .issue-body { flex: 1; color: #94a3b8; line-height: 1.5; }
-    .issue-excerpt { color: #cbd5e1; font-style: italic; }
-    .issue-suggestion { color: #64748b; font-size: 0.75rem; margin-top: 2px; }
+    .ref-dim.D1 { background: #1e3a8a; color: #93c5fd; }
+    .ref-dim.D2 { background: #3b0764; color: #d8b4fe; }
+    .ref-dim.D3 { background: #0c4a6e; color: #7dd3fc; }
+    .ref-dim.D4 { background: #064e3b; color: #6ee7b7; }
+    .ref-dim.D5 { background: #451a03; color: #fcd34d; }
+    .ref-dim.general { background: #1e2130; color: #94a3b8; }
+
+    .ref-body { min-width: 0; }
+    .ref-claim {
+      color: #cbd5e1;
+      font-style: italic;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 3px;
+    }
+    .ref-source { color: #6ee7f7; font-weight: 600; margin-bottom: 2px; }
+    .ref-url a {
+      color: #4a5568;
+      font-size: 0.72rem;
+      text-decoration: none;
+      word-break: break-all;
+    }
+    .ref-url a:hover { color: #94a3b8; text-decoration: underline; }
+
+    .ref-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; white-space: nowrap; }
+    .ref-reliability {
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 4px;
+    }
+    .ref-reliability.high   { background: #052e16; color: #4ade80; }
+    .ref-reliability.medium { background: #1c1a05; color: #facc15; }
+    .ref-reliability.low    { background: #3b0764; color: #e879f9; }
+
+    .ref-sourcetype {
+      font-size: 0.68rem;
+      color: #4a5568;
+    }
+
+    .ref-verify-warn {
+      font-size: 0.68rem;
+      color: #ca8a04;
+    }
+
+    .ref-disclaimer {
+      margin-top: 10px;
+      padding: 10px 14px;
+      background: #1c1a05;
+      border: 1px solid #854d0e;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      color: #92400e;
+      line-height: 1.5;
+    }
 
     #downloadBtn {
       display: none;
@@ -410,12 +481,15 @@
 
     <!-- Input -->
     <div class="input-group">
-      <input
-        type="text"
-        id="brandInput"
-        placeholder="Enter brand name, e.g. Luckin Coffee"
-        autocomplete="off"
-      />
+      <div class="search-wrapper">
+        <input
+          type="text"
+          id="brandInput"
+          placeholder="Enter brand name, e.g. Apple, Nike, Luckin Coffee"
+          autocomplete="off"
+        />
+        <div id="suggestDropdown"></div>
+      </div>
       <button id="startBtn" onclick="startAnalysis()">Start Analysis</button>
     </div>
 
@@ -446,10 +520,10 @@
         <div class="trend-verdict" id="trendVerdict"></div>
       </div>
 
-      <div id="qualityReport">
-        <h3>Data Quality Audit</h3>
-        <div id="qualityHeader"></div>
-        <div id="qualityIssues"></div>
+      <div id="referencesSection">
+        <h3>References &amp; Source Verification</h3>
+        <div id="referencesList"></div>
+        <div class="ref-disclaimer" id="refDisclaimer"></div>
       </div>
 
       <button id="downloadBtn" onclick="downloadPDF()">
@@ -470,10 +544,55 @@
     let currentStep = 0;
     let downloadUrl = "";
 
-    document.addEventListener("DOMContentLoaded", () => {
-      document.getElementById("brandInput").addEventListener("keydown", e => {
-        if (e.key === "Enter") startAnalysis();
+    // ── Autocomplete ────────────────────────────────────────────────────────────
+    let suggestTimer = null;
+
+    function closeSuggest() {
+      const dd = document.getElementById('suggestDropdown');
+      dd.style.display = 'none';
+      dd.innerHTML = '';
+    }
+
+    function selectSuggestion(name) {
+      document.getElementById('brandInput').value = name;
+      closeSuggest();
+      startAnalysis();
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const input = document.getElementById('brandInput');
+
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { closeSuggest(); startAnalysis(); }
+        if (e.key === 'Escape') closeSuggest();
       });
+
+      input.addEventListener('input', () => {
+        const q = input.value.trim();
+        clearTimeout(suggestTimer);
+        if (q.length < 2) { closeSuggest(); return; }
+
+        suggestTimer = setTimeout(async () => {
+          try {
+            const res = await fetch(`/api/suggest?q=${encodeURIComponent(q)}`);
+            let { suggestions } = await res.json();
+            const dd = document.getElementById('suggestDropdown');
+            if (!suggestions || suggestions.length === 0) { closeSuggest(); return; }
+            suggestions = suggestions.filter(s => s.toLowerCase().includes(q.toLowerCase()));
+            if (suggestions.length === 0) { closeSuggest(); return; }
+            dd.innerHTML = suggestions.map(s =>
+              `<div class="suggest-item" onmousedown="selectSuggestion(${JSON.stringify(s)})">${s}</div>`
+            ).join('');
+            dd.style.display = 'block';
+          } catch (_) { closeSuggest(); }
+        }, 380);
+      });
+
+      input.addEventListener('blur', () => setTimeout(closeSuggest, 150));
+    });
+
+    document.addEventListener('click', e => {
+      if (!e.target.closest('.search-wrapper')) closeSuggest();
     });
 
     // ── UI helpers ──────────────────────────────────────────────────────────
@@ -491,7 +610,7 @@
       document.getElementById("progressFill").style.width = "0%";
       document.getElementById("scoreBreakdown").classList.remove("visible");
       document.getElementById("trendRationale").classList.remove("visible");
-      document.getElementById("qualityReport").classList.remove("visible");
+      document.getElementById("referencesSection").classList.remove("visible");
     }
 
     async function startAnalysis() {
@@ -600,36 +719,36 @@
           document.getElementById("trendVerdict").textContent = tr.verdict || "";
           document.getElementById("trendRationale").classList.add("visible");
 
-          // Render data quality report
-          const qr = p.qualityReport || {};
-          const unavailable = qr.unavailable ?? false;
-          const score = qr.qualityScore ?? "—";
-          const passed = qr.passed ?? false;
-          const retried = qr.wasRetried ?? false;
-          const statusClass = unavailable ? "retry" : (passed ? "pass" : "warn");
-          const statusIcon  = unavailable ? "?" : (passed ? "✓" : "⚠");
-          const retryNote   = retried ? ' <span style="color:#60a5fa;font-size:0.75rem">(auto-retried)</span>' : "";
-
-          document.getElementById("qualityHeader").innerHTML = `
-            <div class="quality-header ${statusClass}">
-              <div class="quality-badge ${statusClass}">${statusIcon} ${score}</div>
-              <div class="quality-meta">
-                <div class="q-score">${passed ? "Quality Check Passed" : "Quality Warnings Detected"}${retryNote}</div>
-                <div class="q-summary">${qr.summary || ""}</div>
-              </div>
-            </div>`;
-
-          const issues = (qr.issues || []).slice(0, 8);
-          document.getElementById("qualityIssues").innerHTML = issues.map(i => `
-            <div class="quality-issue">
-              <span class="issue-type ${i.type}">${i.type.replace(/_/g," ")}</span>
-              <div class="issue-body">
-                <div class="issue-excerpt">"${i.excerpt}"</div>
-                <div class="issue-suggestion">→ ${i.suggestion}</div>
-              </div>
-            </div>`).join("");
-
-          document.getElementById("qualityReport").classList.add("visible");
+          // Render references
+          const rd = p.referencesData || {};
+          const refs = rd.references || [];
+          const SOURCE_TYPE_LABELS = {
+            official_ir:     'Official IR',
+            industry_report: 'Industry Report',
+            regulatory:      'Regulatory',
+            platform_data:   'Platform Data',
+            news_media:      'News Media',
+            estimated:       'Estimated',
+          };
+          if (refs.length > 0) {
+            document.getElementById("referencesList").innerHTML = refs.map(r => `
+              <div class="ref-item">
+                <span class="ref-id">${r.id || ''}</span>
+                <span class="ref-dim ${r.dimension || 'general'}">${r.dimension || '—'}</span>
+                <div class="ref-body">
+                  <div class="ref-claim">"${(r.claimExcerpt || '').slice(0, 120)}"</div>
+                  <div class="ref-source">${r.source || ''}</div>
+                  ${r.url ? `<div class="ref-url"><a href="${r.url}" target="_blank" rel="noopener">${r.url}</a></div>` : ''}
+                </div>
+                <div class="ref-meta">
+                  <span class="ref-reliability ${r.reliability || 'low'}">${(r.reliability || '').toUpperCase()}</span>
+                  <span class="ref-sourcetype">${SOURCE_TYPE_LABELS[r.sourceType] || r.sourceType || ''}</span>
+                  ${r.needsVerification ? '<span class="ref-verify-warn">⚠ verify URL</span>' : ''}
+                </div>
+              </div>`).join('');
+            document.getElementById("refDisclaimer").textContent = rd.disclaimer || '';
+            document.getElementById("referencesSection").classList.add("visible");
+          }
 
           document.getElementById("resultsSection").classList.add("visible");
           document.getElementById("downloadBtn").classList.add("visible");

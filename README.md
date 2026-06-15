@@ -1,6 +1,6 @@
 # Brand Market Analysis Agent
 
-An AI-powered web application that generates structured China market analysis reports for any brand, complete with a downloadable PDF.
+An AI-powered web application that generates structured global market analysis reports for any brand, complete with a downloadable PDF.
 
 ---
 
@@ -11,8 +11,9 @@ Enter a brand name, and the agent will:
 1. Call the **Anthropic Claude API** to produce a detailed 5-dimension market analysis in structured JSON
 2. Validate the brand through a two-stage existence check before generating any report
 3. Audit the analysis for vague language and missing specifics (Stage C quality check)
-4. Render an **inline preview** with scored metrics, quality badge, and issue list in the browser
-5. Generate a **professional 7-page PDF report** (A4) available for one-click download
+4. Generate a **References section** (Stage D) — each key claim is matched to a named source with URL, source type, and reliability rating
+5. Render an **inline preview** with scored metrics, quality badge, issue list, and references in the browser
+6. Generate a **professional 8-page PDF report** (A4) available for one-click download
 
 ---
 
@@ -20,12 +21,16 @@ Enter a brand name, and the agent will:
 
 | Feature | Details |
 |---|---|
-| 5-Dimension Analysis | Price, Core Selling Points, Sales Channels, Target Audience, Competitive Landscape |
+| **Global market analysis** | Analysis adapts to the brand's actual primary market(s) — not locked to China; works for US, EU, SE Asia, etc. |
+| **Company name autocomplete** | Search bar shows up to 6 real company suggestions as you type; click to instantly launch analysis |
+| 5-Dimension Analysis | Price, Core Selling Points, Sales Channels, Target Audience, Competitive Landscape — each with 8+ tagged insights |
+| **Extended Thinking (Stage A)** | `claude-sonnet-4-6` runs with up to 8,000 thinking tokens before generating the analysis JSON, producing deeper and more consistent insights |
 | Sentiment Score | Weighted composite score (0–100) across 5 sub-dimensions with progress-bar breakdown |
 | Market Trend | `growing / stable / declining` verdict backed by 4 explicit indicators with per-indicator rationale |
 | **Two-stage brand validation** | Stage A (embedded in analysis) + Stage B (independent lightweight check) — rejects fictional or misspelled brands before generating a report |
 | **Data quality audit (Stage C)** | Independent Claude call audits the analysis for vague language, missing specifics, and potentially fabricated figures — score shown in UI with per-issue breakdown |
-| PDF Report | Cover page, Table of Contents, one full page per dimension — generated via PDFKit |
+| **References & Source Verification (Stage D)** | Claude Haiku maps each key claim to a named source (official IR, industry report, regulatory database, etc.) with a URL, source type badge, and reliability rating (`high / medium / low`). Shown in UI and as a dedicated PDF page. |
+| PDF Report | Cover page, Table of Contents, five dimension pages, References page — generated via PDFKit |
 | Live progress UI | Animated step-by-step status bar while the analysis runs |
 | **Simple deployment** | One `ANTHROPIC_API_KEY` in `.env` — configure once, deploy anywhere |
 
@@ -34,7 +39,7 @@ Enter a brand name, and the agent will:
 ## Tech Stack
 
 - **Runtime**: Node.js + Express 5
-- **AI Model**: Anthropic Claude (`claude-sonnet-4-6` for analysis, `claude-haiku-4-5-20251001` for verification/audit) via REST API (axios)
+- **AI Model**: Anthropic Claude (`claude-sonnet-4-6` + Extended Thinking for analysis, `claude-haiku-4-5-20251001` for verification/audit/suggestions) via REST API (axios)
 - **PDF**: PDFKit
 - **Frontend**: Vanilla HTML/CSS/JS (single `index.html`)
 
@@ -95,11 +100,11 @@ Open `http://localhost:3000` in your browser.
 
 ## Usage
 
-1. Enter a brand name in the input field (e.g. *Luckin Coffee*, *Huawei*, *BYD*)
-3. Click **Start Analysis**
-4. Wait ~20–60 seconds while Claude runs the 3-stage pipeline and generates the PDF
-5. Review the inline preview — Sentiment Score breakdown, Market Trend rationale, and Data Quality Audit are shown below the summary
-6. Click **Download PDF Report** to save the full 7-page report
+1. Start typing a brand name — a dropdown of up to 6 matching company suggestions will appear; click one to auto-fill and start analysis immediately
+2. Or type the full name manually and click **Start Analysis**
+4. Wait ~30–90 seconds while Claude runs the 4-stage pipeline and generates the PDF
+5. Review the inline preview — Sentiment Score breakdown, Market Trend rationale, Data Quality Audit, and References are shown below the summary
+6. Click **Download PDF Report** to save the full 8-page report
 
 ---
 
@@ -188,6 +193,21 @@ Run a full analysis pipeline for a brand.
       "issues": [...],
       "summary": "..."
     },
+    "referencesData": {
+      "references": [
+        {
+          "id": "R01",
+          "dimension": "D1",
+          "claimExcerpt": "...",
+          "source": "Organisation — Report Title",
+          "url": "https://...",
+          "sourceType": "official_ir|industry_report|regulatory|platform_data|news_media|estimated",
+          "reliability": "high|medium|low",
+          "needsVerification": false
+        }
+      ],
+      "disclaimer": "..."
+    },
     "strategicInsights": ["...", "...", "..."],
     "recommendations":   ["...", "...", "..."],
     "dimensions": [...],
@@ -204,6 +224,15 @@ Run a full analysis pipeline for a brand.
 | 400 | Missing brand name | `{ success: false, error: "…" }` |
 | 404 | Brand not recognised | `{ success: false, brandNotFound: true, error: "…" }` |
 | 502 | Claude API / network error | `{ success: false, error: "…" }` |
+
+### `GET /api/suggest?q=<query>`
+
+Return up to 6 real company/brand name suggestions matching the query string (min 2 chars). Powered by Claude Haiku.
+
+**Response:**
+```json
+{ "suggestions": ["Apple Inc.", "Apple Bank", "Applebee's"] }
+```
 
 ### `GET /download/:filename`
 
@@ -222,6 +251,7 @@ Stream a previously generated PDF report to the browser.
 | 5 | Dimension 3: Sales Channels |
 | 6 | Dimension 4: Target Audience |
 | 7 | Dimension 5: Competitive Landscape |
+| 8 | References & Source Verification — claim-to-source mapping with reliability ratings and URLs |
 
 ---
 
@@ -284,6 +314,44 @@ If the first analysis scores below 70, the pipeline automatically retries Stage 
 ### Graceful degradation
 
 If the audit API call itself fails, the analysis and PDF are still returned. The quality section in the UI shows a blue `?` badge and an "Audit unavailable" message — the report is not blocked.
+
+---
+
+## References & Source Verification (Stage D)
+
+After the quality audit, a fourth Claude Haiku call maps the most important claims in the analysis to named, publicly available sources.
+
+### What each reference contains
+
+| Field | Description |
+|---|---|
+| `id` | Sequential reference ID (R01, R02, …) |
+| `dimension` | Which analysis dimension the claim belongs to (D1–D5 or `general`) |
+| `claimExcerpt` | First 120 characters of the original claim |
+| `source` | Organisation name and report/page title |
+| `url` | Best known URL for that source |
+| `sourceType` | Category: `official_ir`, `industry_report`, `regulatory`, `platform_data`, `news_media`, or `estimated` |
+| `reliability` | `high` (official/regulatory), `medium` (industry research/media), or `low` (estimate) |
+| `needsVerification` | `true` if the URL is not fully confirmed as currently live |
+
+### Source types
+
+| Type | Examples |
+|---|---|
+| `official_ir` | Brand investor-relations pages, official press releases |
+| `industry_report` | iResearch, Euromonitor, Nielsen, Frost & Sullivan, QuestMobile |
+| `regulatory` | SAMR, NMPA, NBS (stats.gov.cn), customs.gov.cn |
+| `platform_data` | Tmall, JD.com, Douyin, Pinduoduo official data releases |
+| `news_media` | Caixin, 36kr, Reuters, Bloomberg, WSJ |
+| `estimated` | No retrievable source — AI training-knowledge inference |
+
+### Disclaimer
+
+All references are generated by AI from training data. URLs and source details **must be independently verified** before citation in any research, report, or publication. References are a starting point for human verification, not a substitute for it.
+
+### Graceful degradation
+
+If Stage D fails, the analysis and PDF are still returned. The References section in the UI and PDF shows an "unavailable" message — the report is not blocked.
 
 ---
 

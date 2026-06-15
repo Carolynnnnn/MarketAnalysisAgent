@@ -7,12 +7,32 @@ const cors    = require('cors');
 const path    = require('path');
 const fs      = require('fs');
 
-const { analyzeBrand, BrandNotFoundError } = require('./analyzer');
+const { analyzeBrand, suggestCompanies, BrandNotFoundError } = require('./analyzer');
 const { generatePDF }  = require('./pdfGenerator');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
 const REPORTS_DIR = path.join(__dirname, 'Reports');
+
+// ─── Brand result cache ───────────────────────────────────────────────────────
+// Avoids re-running the full 4-stage pipeline for repeated identical queries.
+// TTL: 1 hour (configurable via CACHE_TTL_MS env var).
+const CACHE_TTL_MS = parseInt(process.env.CACHE_TTL_MS ?? '3600000', 10); // default 1 h
+const brandCache   = new Map(); // key: brand name (lowercase) → { ts, payload }
+
+function getCached(brandName) {
+  const entry = brandCache.get(brandName.toLowerCase());
+  if (!entry) return null;
+  if (Date.now() - entry.ts > CACHE_TTL_MS) {
+    brandCache.delete(brandName.toLowerCase());
+    return null;
+  }
+  return entry.payload;
+}
+
+function setCached(brandName, payload) {
+  brandCache.set(brandName.toLowerCase(), { ts: Date.now(), payload });
+}
 
 // ─── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors());
@@ -37,6 +57,18 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
+// GET /api/suggest — company name autocomplete
+app.get('/api/suggest', async (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (q.length < 2) return res.json({ suggestions: [] });
+  try {
+    const suggestions = await suggestCompanies(q);
+    res.json({ suggestions });
+  } catch (_) {
+    res.json({ suggestions: [] });
+  }
+});
+
 // POST /analyze — full analysis pipeline
 app.post('/analyze', async (req, res) => {
   const { brand } = req.body;
@@ -48,6 +80,13 @@ app.post('/analyze', async (req, res) => {
 
   const brandName = brand.trim();
   log('info', 'PIPELINE', `Starting analysis for brand: "${brandName}"`);
+
+  // ── Cache hit: return stored result immediately ───────────────────────────
+  const cachedPayload = getCached(brandName);
+  if (cachedPayload) {
+    log('info', 'CACHE', `Cache hit for "${brandName}" — skipping API calls.`);
+    return res.status(200).json(cachedPayload);
+  }
 
   // ── Step 1: AI analysis ───────────────────────────────────────────────────
   let analysis;
@@ -92,6 +131,7 @@ app.post('/analyze', async (req, res) => {
     marketTrend:           analysis.marketTrend,
     marketTrendRationale:  analysis.marketTrendRationale ?? {},
     qualityReport:         analysis.qualityReport ?? {},
+    referencesData:        analysis.referencesData ?? {},
     strategicInsights:   (analysis.strategicInsights ?? []).slice(0, 3),
     recommendations:     (analysis.recommendations   ?? []).slice(0, 3),
     dimensions:          (analysis.dimensions ?? []).map(({ id, title, summary, conclusion }) => ({
@@ -103,13 +143,18 @@ app.post('/analyze', async (req, res) => {
 
   log('info', 'PIPELINE', `Analysis pipeline complete for "${brandName}". Sending response.`);
 
-  return res.status(200).json({
+  const responsePayload = {
     success:     true,
     brand:       brandName,
     downloadUrl,
     filename,
     preview,
-  });
+  };
+
+  // ── Cache the result for subsequent identical requests ────────────────────
+  setCached(brandName, responsePayload);
+
+  return res.status(200).json(responsePayload);
 });
 
 // GET /download/:filename — stream PDF to browser
